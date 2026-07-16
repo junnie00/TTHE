@@ -218,33 +218,6 @@ def run_code(code, tests, timeout=8):
     return {"n_pass": sum(r["ok"] for r in results), "n_total": len(results), "results": results}
 
 
-def run_hidden_inputs(code, problem, timeout=6, cap=None):
-    """LABEL-FREE test-time signal. Run CODE on the HIDDEN test INPUTS and report ONLY execution behaviour
-    per input: 'ok' | 'crash' | 'timeout' | 'empty' (+ the code's own stdout). This is transductive
-    test-time adaptation on the *unlabeled* test inputs — it NEVER reads the expected output `t['output']`
-    and NEVER decides correctness (that lives only in is_correct, measurement-only). It is a stronger
-    counterpart to stress(): the real hidden-suite inputs rather than self-generated ones, so it catches the
-    large-N TLE / boundary crash that public samples miss — without ever using the answer key."""
-    priv = problem.private_tests()
-    if cap:
-        priv = priv[:cap]
-    results = []
-    for t in priv:
-        rc, so, se = _run_one(code, t.get("input", ""), timeout)   # ONLY t['input'] is read; t['output'] is NOT
-        status = ("timeout" if rc == -9 else "crash" if rc != 0 else "empty" if not so.strip() else "ok")
-        results.append({"status": status, "rc": rc,
-                        "stdout": so[:400],                        # the CODE's own output (not the answer)
-                        "stderr": se[:200] if status != "ok" else "",
-                        "input": str(t.get("input", ""))[:160]})   # NOTE: expected output deliberately omitted
-    n = len(results)
-    return {"n_total": n,
-            "n_ran": sum(r["status"] == "ok" for r in results),
-            "n_crash": sum(r["status"] == "crash" for r in results),
-            "n_timeout": sum(r["status"] == "timeout" for r in results),
-            "n_empty": sum(r["status"] == "empty" for r in results),
-            "results": results}
-
-
 def is_correct(code, problem, timeout=6):
     """MEASUREMENT ONLY: True iff CODE passes ALL private (hidden) tests. Short-circuits on the FIRST
     failing test so a wrong/slow solution doesn't run the whole (possibly large, slow) hidden suite."""
