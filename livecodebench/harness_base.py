@@ -1,9 +1,11 @@
 """The HARNESS interface for LiveCodeBench (analogue of text_to_sql/harness_base.py).
 
 A harness is ARBITRARY PYTHON wrapping the FROZEN weak solver. `solve()` can do anything the proposer
-writes: read the problem, call the coder, RUN candidate code on the PUBLIC sample tests, diagnose
-failures, repair, retry, self-consistency-vote, etc. LABEL-FREE: it may only look at the problem text and
-PUBLIC-test execution results — never the private/hidden tests (those are gold, used outside for scoring).
+writes: read the problem, call the coder, RUN candidate code on the PUBLIC sample tests, stress-test it on
+self-generated max-constraint inputs, diagnose failures, repair, retry, etc. (Majority/self-consistency
+vote is NOT reliable here — on hard problems the model's errors are correlated, so the majority is often the
+same wrong answer.) LABEL-FREE: it may only use the problem text, the PUBLIC-test execution results, and
+self-generated stress inputs — never the private/hidden tests (those are gold, used outside for scoring).
 """
 from abc import ABC, abstractmethod
 
