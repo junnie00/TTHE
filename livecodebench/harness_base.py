@@ -2,9 +2,10 @@
 
 A harness is ARBITRARY PYTHON wrapping the FROZEN weak solver. `solve()` can do anything the proposer
 writes: read the problem, call the coder, RUN candidate code on the PUBLIC sample tests, stress-test it on
-self-generated max-constraint inputs, diagnose failures, repair, retry, etc. (Majority/self-consistency
-vote is NOT reliable here — on hard problems the model's errors are correlated, so the majority is often the
-same wrong answer.) LABEL-FREE: it may only use the problem text, the PUBLIC-test execution results, and
+self-generated max-constraint inputs, diagnose failures, repair, retry, etc. (Consensus across samples is a
+WEAK prior, not proof of correctness — it agrees with the truth on easy problems but can be confidently wrong
+on hard ones where the model's errors are correlated; prefer the objective execution signals and use
+agreement only as a soft tiebreaker.) LABEL-FREE: it may only use the problem text, the PUBLIC-test execution results, and
 self-generated stress inputs — never the private/hidden tests (those are gold, used outside for scoring).
 """
 from abc import ABC, abstractmethod

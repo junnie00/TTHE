@@ -2,9 +2,10 @@
 
 A harness is ARBITRARY PYTHON wrapping the FROZEN weak solver. Unlike a prompt + a fixed menu of
 toggles, `solve()` can do anything the proposer writes: retrieve real DB values, decompose into
-sub-steps, self-verify against the schema, repair failed queries, etc. (Do NOT rely on
-majority/self-consistency vote for correctness — the model's errors are correlated, so the majority
-is often the same wrong answer.) This is the meta-harness representation — the proposer writes
+sub-steps, self-verify against the schema, repair failed queries, etc. (Consensus across samples is a
+WEAK prior, not proof — it agrees with the truth on easy questions but can be confidently wrong on hard
+ones where the model's errors are correlated; prefer objective signals like execution results, use
+agreement only as a soft tiebreaker.) This is the meta-harness representation — the proposer writes
 subclasses of SQLHarness.
 
 LABEL-FREE: a harness may adapt ONLINE on the unlabeled test stream via observe(), which receives only
