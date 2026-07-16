@@ -207,13 +207,18 @@ def run_picker(tk):
         f"Each `{trace_dir}/<harness>__q<j>.md` has the PROBLEM, every coder call (+ thinking on/off), the final "
         f"code, and the PUBLIC-TEST RESULTS.\n\n"
         f"HARD RULES:\n"
-        f"1. DO NOT EYEBALL. Don't judge code 'looks right'. VERIFY: re-run the candidate's code on the public "
-        f"tests yourself and base the verdict on what actually passes. Run: PYTHONPATH={MH_ROOT} python -c "
+        f"1. DO NOT EYEBALL. VERIFY by re-running each candidate's code yourself — on the PUBLIC tests AND on "
+        f"self-generated STRESS inputs (a code can pass every small public sample yet CRASH/TLE on large "
+        f"inputs, which is exactly what the hidden suite tests). Run: PYTHONPATH={MH_ROOT} python -c "
         f"\"from {PKG} import lcb_bridge as b; from {PKG}.lcb_common import load_harness; "
         f"probs={{p.qid:p for p in b.load_problems('test6',stdin_only=True)}}; "
-        f"p=probs['<qid>']; print(b.run_code(load_harness('<name>',p).solve(), p.public_tests))\".\n"
-        f"2. Count public-test passes per candidate over the whole batch; pick the highest. Ties -> prefer the "
-        f"simpler/more general harness.\n\n"
+        f"p=probs['<qid>']; c=load_harness('<name>',p).solve(); print('public', b.run_code(c, p.public_tests)); "
+        f"print('stress', [r['status'] for r in b.run_stress(c, b.gen_stress_inputs(p))])\".\n"
+        f"2. Rank candidates by public-test passes over the batch. Among the top, PREFER the one whose solutions "
+        f"are more ROBUST — survive stress (fewer crash/timeout) and are self-consistent. A candidate that passes "
+        f"MORE public tests but whose solutions CRASH/TLE on stress inputs is likely OVERFIT to the tiny public "
+        f"samples and will fail the hidden suite; do NOT reward it over a slightly-lower-public but stress-robust "
+        f"one. Never use hidden tests or the answer key. Ties -> the simpler/more general harness.\n\n"
         f"Write ONLY the chosen harness's exact NAME to `{choice_path}` (run:  echo <name> > {choice_path} ). Then STOP.")
     claude_wrapper.run(prompt=prompt, model=tk["model"], allowed_tools=PROPOSER_TOOLS, cwd=str(MH_ROOT),
                        log_dir=str(Path(tk["run_dir"]) / "claude_sessions"), name=f"judge_{tk['tag']}",
