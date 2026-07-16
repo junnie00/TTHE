@@ -53,7 +53,6 @@ def main():
     ap.add_argument("--model", default=os.environ.get("TTHO_PROPOSER_MODEL", "deepseek-v4-flash"))
     ap.add_argument("--run-name", default="ds1000pilot")
     ap.add_argument("--fresh", action="store_true")
-    ap.add_argument("--refresh-bare", action="store_true")
     ap.add_argument("--initial-harness", default="bare",
                     help="seed harness the evolution starts from (e.g. react)")
     args = ap.parse_args()
@@ -175,37 +174,15 @@ def main():
         log.flush()
     log.close()
 
-    # BARE BASELINE (single greedy call, thinking off) — the comparison floor; cached per pid in
-    # logs/bare_cache.json and reused across runs (so it is never recomputed).
-    from .agents.bare import SYS as _BARE_SYS
-    bare_cache_path = PKG_DIR / "logs" / "bare_cache.json"
-    bare_cache = json.load(open(bare_cache_path)) if (bare_cache_path.exists() and not args.refresh_bare) else {}
-    todo = [p for p in items if str(p.pid) not in bare_cache]
-    if todo:
-        print(f"\n[baseline] running bare on {len(todo)} NEW problems (reusing {len(items)-len(todo)}) ...", flush=True)
-
-        def bare_one(p):
-            code = bridge.extract_code(bridge.solver_llm(p.prompt, system=_BARE_SYS, thinking=False))
-            return str(p.pid), bool(bridge.is_correct(code, p))
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            for pid, ok in ex.map(bare_one, todo):
-                bare_cache[pid] = ok
-        json.dump(bare_cache, open(bare_cache_path, "w"), indent=2)
-    bare_correct = sum(bare_cache.get(str(p.pid), False) for p in items)
-
     print(f"\n######### RESULT (test-time / transductive) — final H = {H} #########", flush=True)
-    print(f"  bare baseline = {bare_correct}/{len(items)}")
-    print(f"  test-time evolved = {tt_correct}/{tt_total}")
-    print("  by library (bare vs evolved):")
+    print(f"  test-time evolved = {tt_correct}/{tt_total}   (baseline = plain react, measured separately)")
+    print("  by library (evolved):")
     for lib in sorted(libs):
-        idx = [p for p in items if p.library == lib]
-        bare_l = sum(bare_cache.get(str(p.pid), False) for p in idx)
         ev_l = sum(r["correct"] for r in ev_results if r["library"] == lib)
         ev_n = sum(1 for r in ev_results if r["library"] == lib)
-        print(f"    {lib:12} bare {bare_l}/{len(idx)}   evolved {ev_l}/{ev_n}")
-    json.dump({"bare": bare_correct, "tt_correct": tt_correct, "tt_total": tt_total, "final_harness": H,
-               "batches": tt_log, "per_problem": ev_results,
-               "bare_by_pid": {str(p.pid): bare_cache.get(str(p.pid), False) for p in items}},
+        print(f"    {lib:12} evolved {ev_l}/{ev_n}")
+    json.dump({"tt_correct": tt_correct, "tt_total": tt_total, "final_harness": H,
+               "batches": tt_log, "per_problem": ev_results},
               open(run_dir / "result.json", "w"), indent=2)
     print(f"[saved] {run_dir}/result.json   [traces] {run_dir}/traces/")
 

@@ -185,29 +185,15 @@ def main():
         log.flush()
     log.close()
 
-    # BARE baseline (stock mini-swe-agent on ALL items) — the comparison baseline; cached per instance_id in
-    # logs/bare_cache.json and reused across runs.
+    # BARE baseline = stock mini-swe-agent (the paper's SWE baseline). READ-ONLY: measured once, offline,
+    # and saved in logs/bare_cache.json; NEVER recomputed here (recomputing would burn API on a number we
+    # already have). An instance absent from the cache simply does not count.
     bare_cache_path = PKG_DIR / "logs" / "bare_cache.json"
     bare_cache = json.load(open(bare_cache_path)) if bare_cache_path.exists() else {}
-    todo = [inst for inst in items if inst["instance_id"] not in bare_cache]
-    if todo:
-        print(f"\n[baseline] running bare on {len(todo)} NEW instances (reusing {len(items)-len(todo)}) ...", flush=True)
-        cls = type(load_harness("bare", todo[0]))
-        patches = [None] * len(todo)
-
-        def bare_one(ji):
-            j, inst = ji
-            patches[j] = safe_solve(cls(inst), args.solve_timeout)
-        with ThreadPoolExecutor(max_workers=5) as ex:
-            list(ex.map(bare_one, list(enumerate(todo))))
-        gold = bridge.is_correct_batch(list(zip(todo, patches)), run_id=f"{args.run_name}_bare")
-        for inst in todo:
-            bare_cache[inst["instance_id"]] = bool(gold.get(inst["instance_id"], False))
-        json.dump(bare_cache, open(bare_cache_path, "w"), indent=2)
     bare_correct = sum(bare_cache.get(inst["instance_id"], False) for inst in items)
 
     print(f"\n######### RESULT (test-time / transductive) — final H = {H} #########", flush=True)
-    print(f"  bare baseline   = {bare_correct}/{len(items)}")
+    print(f"  bare baseline (mini-swe-agent, from saved cache) = {bare_correct}/{len(items)}")
     print(f"  test-time evolved = {tt_correct}/{tt_total}")
     json.dump({"bare": bare_correct, "tt_correct": tt_correct, "tt_total": tt_total, "final_harness": H,
                "batches": tt_log, "per_problem": ev_results,

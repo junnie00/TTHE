@@ -22,7 +22,6 @@ fixability.py / tt.py / evolve.py. NOTE evolve.py & online.py are ALSO shared li
       --db card_games --random 12 --group 2 --proposer agentic
 """
 import argparse
-import hashlib
 import json
 import os
 import random
@@ -146,12 +145,6 @@ def main():
     ap.add_argument("--prefix-results", default=None,
                     help="JSON file containing measured batch records before --start-batch")
     ap.add_argument("--fresh", action="store_true")
-    ap.add_argument("--refresh-bare", action="store_true", help="recompute the bare baseline even if cached in logs/bare_cache.json")
-    ap.add_argument(
-        "--bare-result",
-        default=None,
-        help="model-matched fixed bare result.json to reuse instead of re-calling the solver",
-    )
     args = ap.parse_args()
 
     if args.fresh:
@@ -467,73 +460,12 @@ def main():
         log.flush()
     log.close()
     branch_log.close()
-    # BARE BASELINE (no evolution), single-shot — the reference for "did adapting help".
-    # Cache identity includes the dataset, solver model/endpoint, and bare harness digest;
-    # question-only keys would silently reuse another model's baseline.
-    bare_cache_path = PKG_DIR / "logs" / "bare_cache.json"
-    bare_cache = json.load(open(bare_cache_path)) if (bare_cache_path.exists() and not args.refresh_bare) else {}
-    bare_harness_digest = hashlib.sha1(
-        (AGENTS_DIR / "bare.py").read_bytes()
-    ).hexdigest()[:12]
-    bare_identity = json.dumps(
-        {
-            "dataset_file": os.environ.get("BIRD_DEV_FILE", "dev.json"),
-            "solver_model": os.environ.get("SOLVER_MODEL", "default"),
-            "solver_base_url": os.environ.get("SOLVER_BASE_URL", "default"),
-            "harness_digest": bare_harness_digest,
-        },
-        sort_keys=True,
-    )
-
-    def bkey(d, q):
-        return hashlib.sha1(
-            f"{bare_identity}\n{d}\n{q.question}".encode()
-        ).hexdigest()
-
-    if args.bare_result:
-        fixed = json.loads(Path(args.bare_result).read_text(encoding="utf-8"))
-        records = fixed.get("per_problem") or []
-        if fixed.get("harness") != "bare" or len(records) != len(items):
-            raise ValueError(
-                "--bare-result must be a fixed bare result over exactly the current items"
-            )
-        for position, ((db_id, question), record) in enumerate(zip(items, records)):
-            if record.get("position") != position or record.get("db_id") != db_id:
-                raise ValueError(
-                    f"--bare-result item mismatch at position {position}: {record}"
-                )
-            bare_cache[bkey(db_id, question)] = bool(record["correct"])
-        bare_cache_path.write_text(json.dumps(bare_cache), encoding="utf-8")
-
-    todo = [(d, q, g) for (d, q), g in zip(items, golds) if bkey(d, q) not in bare_cache]
-    if todo:
-        print(f"\n[baseline] running bare on {len(todo)} NEW question(s) (reusing {len(items) - len(todo)} cached) ...", flush=True)
-        def bare_hit(arg):
-            d, q, g = arg
-            key = bkey(d, q)
-            outcome = isolated_solve(
-                run_dir,
-                "bare",
-                d,
-                q.question,
-                args.solve_timeout,
-                f"baseline_bare_{key}",
-            )
-            r = outcome["result"]
-            return bkey(d, q), bool(bridge.is_correct(r, g))
-        with ThreadPoolExecutor(max_workers=16) as ex:
-            for k, ok in ex.map(bare_hit, todo):
-                bare_cache[k] = ok
-        json.dump(bare_cache, open(bare_cache_path, "w"))
-    else:
-        print(f"\n[baseline] all {len(items)} questions cached — bare NOT re-run.", flush=True)
-    bare_correct = sum(bare_cache[bkey(d, q)] for (d, q), _g in zip(items, golds))
     print(f"\n######### RESULT (test-time / transductive) — final harness H = {H} #########", flush=True)
-    print(f"  bare baseline     = {bare_correct}/{len(items)}")
     print(f"  test-time evolved = {tt_correct}/{tt_total}  (each batch scored with the harness CHOSEN FOR it)")
+    print(f"  baseline = plain react, measured separately (never recomputed here)")
     for entry in tt_log:
         print(f"    batch{entry['batch']} [{entry['harness']}]: {entry['correct']}/{entry['total']}")
-    json.dump({"bare": bare_correct, "tt_correct": tt_correct, "tt_total": tt_total,
+    json.dump({"tt_correct": tt_correct, "tt_total": tt_total,
                "final_harness": H, "batches": tt_log,
                "resume": {
                    "start_batch": args.start_batch,

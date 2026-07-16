@@ -53,7 +53,6 @@ def main():
     ap.add_argument("--model", default=os.environ.get("TTHO_PROPOSER_MODEL", "deepseek-v4-flash"))
     ap.add_argument("--run-name", default="lcbpilot")
     ap.add_argument("--fresh", action="store_true")
-    ap.add_argument("--refresh-bare", action="store_true")
     ap.add_argument("--initial-harness", default="bare",
                     help="seed harness the evolution starts from (e.g. react)")
     args = ap.parse_args()
@@ -172,38 +171,15 @@ def main():
         log.flush()
     log.close()
 
-    # BARE-ON BASELINE (single greedy call WITH reasoning) — the comparison baseline; cached per qid in
-    # logs/bare_on_cache.json and reused across runs (so it is never recomputed).
-    from .agents.bare import SYS as _BARE_SYS
-    bare_cache_path = PKG_DIR / "logs" / "bare_on_cache.json"
-    bare_cache = json.load(open(bare_cache_path)) if (bare_cache_path.exists() and not args.refresh_bare) else {}
-    todo = [p for p in items if p.qid not in bare_cache]
-    if todo:
-        print(f"\n[baseline] running bare(thinking-on) on {len(todo)} NEW problems (reusing {len(items)-len(todo)}) ...", flush=True)
-
-        def bare_one(p):
-            prompt = f"{p.content}\n\nWrite the complete Python 3 solution (read stdin, print stdout)."
-            code = bridge.extract_code(bridge.solver_llm(prompt, system=_BARE_SYS, thinking='high'))
-            return p.qid, bool(bridge.is_correct(code, p))
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            for qid, ok in ex.map(bare_one, todo):
-                bare_cache[qid] = ok
-        json.dump(bare_cache, open(bare_cache_path, "w"), indent=2)
-    bare_correct = sum(bare_cache.get(p.qid, False) for p in items)
-
     print(f"\n######### RESULT (test-time / transductive) — final H = {H} #########", flush=True)
-    print(f"  bare baseline (thinking-on) = {bare_correct}/{len(items)}")
-    print(f"  test-time evolved            = {tt_correct}/{tt_total}")
-    print("  by difficulty (bare vs evolved):")
+    print(f"  test-time evolved = {tt_correct}/{tt_total}   (baseline = plain react, measured separately)")
+    print("  by difficulty (evolved):")
     for diff in sorted(diffs):
-        idx = [p for p in items if p.difficulty == diff]
-        bare_d = sum(bare_cache.get(p.qid, False) for p in idx)
         ev_d = sum(r["correct"] for r in ev_results if r["difficulty"] == diff)
         ev_n = sum(1 for r in ev_results if r["difficulty"] == diff)
-        print(f"    {diff:8} bare {bare_d}/{len(idx)}   evolved {ev_d}/{ev_n}")
-    json.dump({"bare": bare_correct, "tt_correct": tt_correct, "tt_total": tt_total, "final_harness": H,
-               "batches": tt_log, "per_problem": ev_results,
-               "bare_by_qid": {p.qid: bare_cache.get(p.qid, False) for p in items}},
+        print(f"    {diff:8} evolved {ev_d}/{ev_n}")
+    json.dump({"tt_correct": tt_correct, "tt_total": tt_total, "final_harness": H,
+               "batches": tt_log, "per_problem": ev_results},
               open(run_dir / "result.json", "w"), indent=2)
     print(f"[saved] {run_dir}/result.json   [traces] {run_dir}/traces/")
 
