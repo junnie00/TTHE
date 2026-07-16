@@ -1,0 +1,15 @@
+# Core (all domains)
+openai>=1.0
+pyyaml>=6.0
+
+# Datasets
+datasets>=2.0          # ds1000, swe
+huggingface_hub>=0.20  # livecodebench
+
+# DS-1000 executes generated data-science snippets against these:
+numpy
+pandas
+scipy
+scikit-learn
+
+# SWE-bench additionally needs (see README): mini-swe-agent, swebench, litellm, and Docker.

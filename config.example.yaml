@@ -1,0 +1,27 @@
+# TTHE run configuration (shared by all domains).
+# Copy to config.yaml (gitignored) and fill in your endpoint. The API key is read from the ENV VAR
+# named by api_key_env — never put the key in this file.
+
+llm:
+  provider: openai                       # any OpenAI-compatible endpoint
+  base_url: https://api.deepseek.com/v1
+  api_key_env: OPENAI_API_KEY            # export this env var with your key
+  solver_model: deepseek-chat            # the FROZEN solver the harness wraps
+  controller_model: deepseek-chat        # round-trip / consistency checker
+  temperature: 0.0
+  request_timeout: 60
+  # How this endpoint expresses "thinking" — chosen by config, NOT by guessing the model name, so any
+  # model switches cleanly by editing this block:
+  #   deepseek : send extra_body {"thinking": {"type": enabled/disabled}} — works for deepseek-v* and mimo-v*
+  #   none     : the model has no thinking toggle (e.g. plain OpenAI) — temperature is used instead
+  thinking_style: deepseek
+  reasoning_effort: high                 # used when thinking is enabled
+
+# ---- Text-to-SQL only ----
+dataset:
+  name: demo                             # demo (offline) | bird
+  db_id: demo
+  # name: bird
+  # bird_root: /path/to/bird/dev_20240627
+
+output_dir: runs
