@@ -48,21 +48,57 @@ def load_instances(ids=None, shuffle_seed=42, limit=None):
     return [rows[i] for i in order]
 
 
-def agent_rollout(instance, system_template=None, instance_template=None, step_limit=80, wall_time=1500):
-    """ONE frozen mini-swe-agent rollout in the instance's Docker container (custom prompts optional ->
-    fall back to the stock swebench.yaml ones). Returns (patch, info) where info has exit_status, n_calls,
-    messages. Never raises; cleans up the container best-effort."""
-    env = None
+# ── FROZEN-SOLVER primitives (the ONLY thing frozen is the LLM: model / endpoint / weights). The harness
+# owns everything else — the bash-interaction LOOP, the tool use, prompts, budget, post-rollout verify. ──
+
+def make_env(instance):
+    """Start the instance's real repo Docker container. Caller owns teardown via teardown_env()."""
+    return get_sb_environment(_CFG, instance)
+
+
+def teardown_env(env):
+    for m in ("cleanup", "__del__"):
+        try:
+            getattr(env, m, lambda: None)()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def make_model():
+    """The FROZEN weak solver (deepseek-v4-flash / mimo-v* via litellm). Do NOT vary model/endpoint."""
+    model_kwargs = {"api_base": BASE_URL,
+                    "api_key": os.environ.get("SWE_SOLVER_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
+                    "drop_params": True}
+    if THINKING_STYLE == "deepseek":                     # deepseek-v* / mimo-v* native thinking toggle
+        model_kwargs["extra_body"] = {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
+    return LitellmModel(model_name=MODEL, model_kwargs=model_kwargs, cost_tracking="ignore_errors")
+
+
+def model_query(model, messages):
+    """ONE call to the frozen solver. `messages` = [{role, content}, ...]. Returns the assistant text."""
     try:
-        env = get_sb_environment(_CFG, instance)
-        model_kwargs = {"api_base": BASE_URL,
-                        "api_key": os.environ.get("SWE_SOLVER_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
-                        "drop_params": True}
-        if THINKING_STYLE == "deepseek":   # deepseek-v* / mimo-v* native thinking toggle; else no toggle
-            # explicit THINKING-ON, consistent with the other domains (reasoning_effort is largely ignored
-            # by some endpoints, but we set it so the config is unambiguous).
-            model_kwargs["extra_body"] = {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
-        model = LitellmModel(model_name=MODEL, model_kwargs=model_kwargs, cost_tracking="ignore_errors")
+        return (model.query(messages) or {}).get("content", "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def exec_in_repo(env, command, timeout=None):
+    """Run one bash `command` in the instance's REAL repo container. Returns {output, returncode}.
+    LABEL-FREE: this is the actual repo — apply a patch, run the agent's OWN reproduction script, run the
+    repo's EXISTING test suite (regression). Never run the gold FAIL_TO_PASS/PASS_TO_PASS suite as a
+    pass/fail verdict — that is the answer key (is_correct, measurement-only)."""
+    try:
+        r = env.execute({"command": command}, timeout=timeout)
+        return {"output": r.get("output", ""), "returncode": r.get("returncode", -1)}
+    except Exception as e:  # noqa: BLE001
+        return {"output": f"(exec error: {type(e).__name__}: {str(e)[:200]})", "returncode": -1}
+
+
+def run_stock_agent(env, model, instance, system_template=None, instance_template=None,
+                    step_limit=80, wall_time=1500):
+    """Run ONE stock mini-swe-agent rollout on a GIVEN env+model (caller owns their lifecycle). This is the
+    default bash loop — a CONVENIENCE the harness may keep, replace with its own llm+exec loop, or wrap."""
+    try:
         agent = DefaultAgent(
             model, env,
             system_template=system_template or DEFAULT_SYS,
@@ -70,17 +106,24 @@ def agent_rollout(instance, system_template=None, instance_template=None, step_l
             step_limit=step_limit, cost_limit=0.0, wall_time_limit_seconds=wall_time,
         )
         result = agent.run(instance["problem_statement"])
-        patch = result.get("submission", "") or ""
-        return patch, {"exit_status": result.get("exit_status"), "n_calls": agent.n_calls,
-                       "messages": agent.messages}
+        return (result.get("submission", "") or ""), {"exit_status": result.get("exit_status"),
+                                                       "n_calls": agent.n_calls, "messages": agent.messages}
+    except Exception as e:  # noqa: BLE001
+        return "", {"exit_status": type(e).__name__, "n_calls": 0, "messages": []}
+
+
+def agent_rollout(instance, system_template=None, instance_template=None, step_limit=80, wall_time=1500):
+    """Backward-compatible one-shot: make env+model, run the stock agent, tear the container down."""
+    env = None
+    try:
+        env = make_env(instance)
+        return run_stock_agent(env, make_model(), instance, system_template, instance_template,
+                               step_limit, wall_time)
     except Exception as e:  # noqa: BLE001
         return "", {"exit_status": type(e).__name__, "n_calls": 0, "messages": []}
     finally:
-        for m in ("cleanup", "__del__"):
-            try:
-                getattr(env, m, lambda: None)()
-            except Exception:  # noqa: BLE001
-                pass
+        if env is not None:
+            teardown_env(env)
 
 
 def is_correct_batch(items, run_id):

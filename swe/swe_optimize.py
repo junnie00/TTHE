@@ -26,11 +26,17 @@ _SOLVE_POOL = ThreadPoolExecutor(max_workers=32)
 
 
 def safe_solve(h, timeout):
-    """Run a (proposer-written) harness's solve() under a hard wall-clock cap so a buggy harness can't hang."""
+    """Run a (proposer-written) harness's solve() under a hard wall-clock cap so a buggy harness can't hang.
+    Always tears down the harness's Docker container afterwards (the harness now owns the env lifecycle)."""
     try:
         return _SOLVE_POOL.submit(h.solve).result(timeout=timeout) or ""
     except Exception:
         return ""
+    finally:
+        try:
+            h.cleanup()
+        except Exception:
+            pass
 
 
 def _loadable(name, instance):
