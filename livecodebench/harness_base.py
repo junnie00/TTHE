@@ -20,8 +20,8 @@ class CodeHarness(ABC):
         _SOLVER_MODEL, no base_url / api_key, no importing a network library. You MAY freely change HOW
         you call it (prompt, thinking, max_tokens, number of calls, voting).
       * LABEL-FREE — use only signals available from the problem itself: the PUBLIC sample tests, code
-        execution, SELF-GENERATED stress inputs (self.stress), self-consistency across candidates, and intent
-        (back-translation). NEVER touch the hidden/private tests — not their inputs, not their outputs — and
+        execution, SELF-GENERATED stress inputs (self.stress), and intent (back-translation). NEVER touch the
+        hidden/private tests — not their inputs, not their outputs — and
         never bridge.is_correct or any grading answer, and no per-question hardcoding. (The hidden tests exist
         to check your program GENERALISES to unseen inputs; running on them would be training on the test.)
 
