@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-07-15T15:49:49.014532+00:00",
+  "prompt": "Reply with exactly the word PONG and nothing else.",
+  "model": "mimo-v2.5",
+  "session_id": "8596a84e-86c6-4751-ab5e-406e3676072f",
+  "exit_code": 0,
+  "duration_seconds": 6.88,
+  "cost_usd": 0.11624,
+  "token_usage": {
+    "input_tokens": 22813,
+    "output_tokens": 21
+  },
+  "command": [
+    "claude",
+    "--dangerously-skip-permissions",
+    "-p",
+    "Reply with exactly the word PONG and nothing else.",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--model",
+    "mimo-v2.5",
+    "--setting-sources",
+    "",
+    "--disable-slash-commands",
+    "--strict-mcp-config",
+    "--plugin-dir",
+    "/tmp/verify_TTHE/text_to_sql/.empty_plugins"
+  ],
+  "cwd": "/tmp",
+  "skill": null,
+  "files_read": {},
+  "files_written": {},
+  "tool_summary": [],
+  "stderr": "\u26a0 claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login \u00b7 Unset it to load your organization's connectors\n"
+}
