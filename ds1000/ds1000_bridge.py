@@ -52,7 +52,7 @@ def _get_client():
     global _client
     if _client is None:
         _client = OpenAI(base_url=_cfg["base_url"], api_key=os.environ[_cfg["api_key_env"]],
-                         timeout=float(os.environ.get("DS1000_SOLVE_TIMEOUT", "180")), max_retries=0)
+                         timeout=float(os.environ.get("DS1000_SOLVE_TIMEOUT", "600")), max_retries=0)
     return _client
 
 

@@ -49,7 +49,7 @@ def main():
     ap.add_argument("--max-rounds", type=int, default=3, help="GENERATE rounds per batch")
     ap.add_argument("--batch-size", type=int, default=5)
     ap.add_argument("--propose-timeout", type=int, default=600, help="hard cap per generator/judge claude session")
-    ap.add_argument("--solve-timeout", type=int, default=200, help="hard cap per harness.solve (anti-hang)")
+    ap.add_argument("--solve-timeout", type=int, default=900, help="hard cap per harness.solve (anti-hang)")
     ap.add_argument("--model", default=os.environ.get("TTHO_PROPOSER_MODEL", "deepseek-v4-flash"))
     ap.add_argument("--run-name", default="lcbpilot")
     ap.add_argument("--fresh", action="store_true")

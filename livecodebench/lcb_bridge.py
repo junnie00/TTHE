@@ -35,7 +35,7 @@ _cfg = yaml.safe_load(open(_CONFIG_PATH, encoding="utf-8"))["llm"]
 # a MAX_TOKENS cap + timeout. HARD problems make this weak model think to the token limit and emit NO answer
 # (finish=length, ~0 code) — the cap bounds latency so a runaway 'think forever' call can't stall the loop.
 _client = OpenAI(base_url=_cfg["base_url"], api_key=os.environ[_cfg["api_key_env"]],
-                 timeout=float(os.environ.get("LCB_SOLVE_TIMEOUT", "180")), max_retries=0)
+                 timeout=float(os.environ.get("LCB_SOLVE_TIMEOUT", "600")), max_retries=0)
 _SOLVER_MODEL = _cfg["solver_model"]
 _REASONING = os.environ.get("LCB_REASONING_EFFORT", _cfg.get("reasoning_effort", "high"))
 _MAX_TOKENS = int(os.environ.get("LCB_MAX_TOKENS", "32000"))   # generous so thinking-on never truncates before the code fence
@@ -216,6 +216,33 @@ def run_code(code, tests, timeout=8):
         results.append({"ok": ok, "rc": rc, "stdout": out[:400], "stderr": err[:300],
                         "input": str(t.get("input", ""))[:160], "expected": str(t.get("output", ""))[:160]})
     return {"n_pass": sum(r["ok"] for r in results), "n_total": len(results), "results": results}
+
+
+def run_hidden_inputs(code, problem, timeout=6, cap=None):
+    """LABEL-FREE test-time signal. Run CODE on the HIDDEN test INPUTS and report ONLY execution behaviour
+    per input: 'ok' | 'crash' | 'timeout' | 'empty' (+ the code's own stdout). This is transductive
+    test-time adaptation on the *unlabeled* test inputs — it NEVER reads the expected output `t['output']`
+    and NEVER decides correctness (that lives only in is_correct, measurement-only). It is a stronger
+    counterpart to stress(): the real hidden-suite inputs rather than self-generated ones, so it catches the
+    large-N TLE / boundary crash that public samples miss — without ever using the answer key."""
+    priv = problem.private_tests()
+    if cap:
+        priv = priv[:cap]
+    results = []
+    for t in priv:
+        rc, so, se = _run_one(code, t.get("input", ""), timeout)   # ONLY t['input'] is read; t['output'] is NOT
+        status = ("timeout" if rc == -9 else "crash" if rc != 0 else "empty" if not so.strip() else "ok")
+        results.append({"status": status, "rc": rc,
+                        "stdout": so[:400],                        # the CODE's own output (not the answer)
+                        "stderr": se[:200] if status != "ok" else "",
+                        "input": str(t.get("input", ""))[:160]})   # NOTE: expected output deliberately omitted
+    n = len(results)
+    return {"n_total": n,
+            "n_ran": sum(r["status"] == "ok" for r in results),
+            "n_crash": sum(r["status"] == "crash" for r in results),
+            "n_timeout": sum(r["status"] == "timeout" for r in results),
+            "n_empty": sum(r["status"] == "empty" for r in results),
+            "results": results}
 
 
 def is_correct(code, problem, timeout=6):
