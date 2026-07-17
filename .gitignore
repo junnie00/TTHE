@@ -23,3 +23,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# --- proposer/judge scratch scripts written to repo root during sessions ---
+/verify_*.py
+/debug_*.py
+/check_*.py
+*.bak
