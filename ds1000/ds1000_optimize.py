@@ -83,11 +83,12 @@ def main():
         for i, st in enumerate(steps, 1):
             if st.get("step") == "coder_llm":
                 L.append(f"\n### step {i} — coder call (thinking={st.get('thinking')})\nPROMPT:\n{str(st.get('prompt'))[:1200]}\n"
-                         f"RESPONSE:\n{str(st.get('response'))[:1200]}")
+                         f"RESPONSE:\n{str(st.get('response'))[:4000]}")
             else:
                 L.append(f"\n### step {i} — self-check: ran={st.get('ran')}  redefines_input={st.get('redefines')}  "
                          f"error={str(st.get('error'))[:200]!r}  output={str(st.get('output'))[:200]!r}")
-        L.append(f"\n## FINAL CODE\n```python\n{str(code)[:4000]}\n```")
+        # FINAL CODE must be COMPLETE — the proposer diagnoses it; a mid-statement cut reads as a phantom bug.
+        L.append(f"\n## FINAL CODE\n```python\n{str(code)}\n```")
         L.append(f"\n## SELF-CHECK (LABEL-FREE — the gold hidden test is NEVER shown; this is the only execution "
                  f"evidence):\n  ran={sc.get('ran')}\n  redefines_input={sc.get('redefines')}  "
                  f"(NON-EMPTY = the solution HARDCODES these input variables instead of using the provided ones "

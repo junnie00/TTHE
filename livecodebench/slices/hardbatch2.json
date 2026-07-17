@@ -1,0 +1,44 @@
+{
+  "items": [
+    {
+      "qid": "abc398_g",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "abc397_d",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "abc389_f",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "arc191_c",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "arc194_b",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "abc393_e",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "arc195_c",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "arc191_d",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "arc195_d",
+      "difficulty": "hard"
+    },
+    {
+      "qid": "arc196_d",
+      "difficulty": "hard"
+    }
+  ]
+}

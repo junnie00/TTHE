@@ -86,10 +86,13 @@ def main():
         for i, st in enumerate(steps, 1):
             if st.get("step") == "coder_llm":
                 L.append(f"\n### step {i} — coder call (thinking={st.get('thinking')})\nPROMPT:\n{str(st.get('prompt'))[:1200]}\n"
-                         f"RESPONSE:\n{str(st.get('response'))[:1200]}")
+                         f"RESPONSE:\n{str(st.get('response'))[:4000]}")
             else:
                 L.append(f"\n### step {i} — public-test run: {st.get('n_pass')}/{st.get('n_total')}")
-        L.append(f"\n## FINAL CODE\n```python\n{str(code)[:4000]}\n```")
+        # FINAL CODE must be COMPLETE — it is what the judge re-runs and what the proposer diagnoses. A cap
+        # here truncated long solutions mid-statement, so the proposer misread truncation as a syntax bug and
+        # "fixed" a phantom; never truncate the final artifact.
+        L.append(f"\n## FINAL CODE\n```python\n{str(code)}\n```")
         L.append(f"\n## PUBLIC-TEST RESULTS ({pub['n_pass']}/{pub['n_total']} passed) — the label-free signal:")
         for k, r in enumerate(pub.get("results", [])[:6]):
             L.append(f"  test{k}: {'PASS' if r['ok'] else 'FAIL'}  input={r['input']!r}  expected={r['expected']!r}  got={r['stdout']!r}  err={r['stderr']!r}")

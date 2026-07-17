@@ -104,7 +104,7 @@ def main():
             else:
                 L.append(f"\nOBSERVATION:\n{content[:800]}")
             shown += 1
-        L.append(f"\n## FINAL PATCH\n```diff\n{str(patch)[:6000]}\n```")
+        L.append(f"\n## FINAL PATCH\n```diff\n{str(patch)}\n```")   # never truncate the final artifact the judge evaluates
         L.append("\nNOTE: a NON-EMPTY, targeted patch whose trajectory shows the agent REPRODUCED the issue and "
                  "VERIFIED the fix (and only touches source, not tests) is the label-free signal — the gold hidden "
                  "tests are NEVER shown here.")

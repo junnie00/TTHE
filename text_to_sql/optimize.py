@@ -239,7 +239,7 @@ def main():
                 L.append(f"\n### step {i} — executed SQL\nSQL: {str(st.get('sql'))[:4000]}\n"
                          f"RESULT: ok={st.get('ok')} n_rows={st.get('n_rows')} rows={str(st.get('rows'))[:300]} "
                          f"error={st.get('error')}")
-        L.append(f"\n## FINAL SQL\n{str(sql)[:4000]}")
+        L.append(f"\n## FINAL SQL\n{str(sql)}")   # never truncate the final artifact the judge re-runs
         L.append(f"\n## FINAL RESULT\n{P.desc(res)}")
         try:
             bt_en = recover(schema, sql) if sql else "(no SQL produced)"
