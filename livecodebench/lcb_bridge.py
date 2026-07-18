@@ -35,10 +35,13 @@ _cfg = yaml.safe_load(open(_CONFIG_PATH, encoding="utf-8"))["llm"]
 # a MAX_TOKENS cap + timeout. HARD problems make this weak model think to the token limit and emit NO answer
 # (finish=length, ~0 code) — the cap bounds latency so a runaway 'think forever' call can't stall the loop.
 _client = OpenAI(base_url=_cfg["base_url"], api_key=os.environ[_cfg["api_key_env"]],
-                 timeout=float(os.environ.get("LCB_SOLVE_TIMEOUT", "600")), max_retries=0)
+                 timeout=float(os.environ.get("LCB_SOLVE_TIMEOUT", "1200")), max_retries=0)
 _SOLVER_MODEL = _cfg["solver_model"]
 _REASONING = os.environ.get("LCB_REASONING_EFFORT", _cfg.get("reasoning_effort", "high"))
-_MAX_TOKENS = int(os.environ.get("LCB_MAX_TOKENS", "32000"))   # generous so thinking-on never truncates before the code fence
+_MAX_TOKENS = int(os.environ.get("LCB_MAX_TOKENS", "65536"))   # measured: hard problems NEED >32k of reasoning
+# (arc193_a solves CORRECTLY at 43k reasoning tokens but emitted NOTHING under the old 32000 cap — the cap,
+#  not the model, caused a chunk of the 'empty code' failures. 64k calls take 6-12 min; client timeout above
+#  raised to 1200s to match.)
 # HOW this endpoint expresses thinking (config, not model-name guessing): "deepseek" -> send the
 # {"thinking": {...}} extra_body (deepseek-v*, mimo-v*); "none" -> no toggle, use temperature.
 _THINKING_STYLE = _cfg.get("thinking_style", "deepseek")
