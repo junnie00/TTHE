@@ -177,33 +177,44 @@ def sample_branches(branches, trace_dir, run_dir, tag, run_name, batch, model, t
 
 
 def run_picker(tk):
-    """ONE JUDGE session: deep-read all candidates' traces, pick the harness passing the MOST public tests."""
+    """ONE JUDGE session: deep-read all candidates' traces and INVESTIGATE which harness is genuinely correct
+    on the most problems. It is given tools, not a fixed metric — mirrors the SQL judge's 'probe, don't
+    eyeball' stance (LCB has no gold Hint, so investigation is the only anchor)."""
     cands, trace_dir, choice_path = tk["candidates"], tk["trace_dir"], tk["choice_path"]
     cand_list = "\n".join(f"  - `{c}`  (traces: {trace_dir}/{c}__q*.md ; code: {AGENTS_DIR}/{c}.py)" for c in cands)
     prompt = (
         f"You are the JUDGE. There are {len(cands)} candidate competitive-programming harnesses; each ran on a "
-        f"BATCH of problems with its FULL trace saved. You do NOT write/change harnesses — ONLY pick the SINGLE "
-        f"best (passing the MOST public tests across the batch). You CANNOT see hidden tests.\n\n"
+        f"BATCH of problems with its FULL trace saved. You do NOT write/change harnesses — pick the SINGLE "
+        f"harness that is GENUINELY CORRECT on the MOST problems in the batch. You CANNOT see the hidden tests.\n\n"
         f"CANDIDATES:\n{cand_list}\n\n"
         f"Each `{trace_dir}/<harness>__q<j>.md` has the PROBLEM, every coder call (+ thinking on/off), the final "
         f"code, and the PUBLIC-TEST RESULTS.\n\n"
-        f"HARD RULES:\n"
-        f"1. DO NOT EYEBALL. VERIFY by re-running each candidate's code yourself on the PUBLIC tests (the "
-        f"GIVEN, label-free samples). Run: PYTHONPATH={MH_ROOT} python -c "
+        f"THE TRAP YOU MUST AVOID: passing the PUBLIC samples does NOT mean correct. The public samples are tiny "
+        f"(often 1-3 cases) and non-adversarial; a plausible-but-wrong program passes them and still fails the "
+        f"hidden suite. Measured on this exact task, ~29% of public-passing solutions are hidden-WRONG. So DO NOT "
+        f"rank by public-pass count — that metric systematically rewards these false positives. Public-pass is a "
+        f"NECESSARY filter (a solution failing public is out), not proof of correctness.\n\n"
+        f"YOUR JOB IS TO INVESTIGATE, not to tally. You have a shell (Bash) and the full bridge. On the problems "
+        f"where the candidates DIFFER, dig in and find which one is actually right, using any label-free evidence "
+        f"you can generate yourself — you are ENCOURAGED to build your own checks:\n"
+        f"  - RE-RUN each candidate's code on the public samples first (filter). PYTHONPATH={MH_ROOT} python -c "
         f"\"from {PKG} import lcb_bridge as b; from {PKG}.lcb_common import load_harness; "
-        f"probs={{p.qid:p for p in b.load_problems('test6',stdin_only=False)}}; "
-        f"p=probs['<qid>']; c=load_harness('<name>',p).solve(); "
-        f"print('public', b.run_code(c, p.public_tests, starter_code=p.starter_code))\".\n"
-        f"2. Rank candidates by public-test passes over the batch. Among the top, prefer the harness whose OWN "
-        f"TRACE shows it EARNED correctness rather than guessed it: it reproduced the exact I-O format, checked "
-        f"edge cases, and — if it chose to — ran its OWN robustness checks (a harness that stress-tests its "
-        f"candidates and repairs the ones that crash/TLE is showing evidence in its favour), and whose intent "
-        f"(back-translation) matches the problem. Do NOT run a stress oracle of your OWN to score them — "
-        f"robustness testing is a technique a harness MAY own, not a signal you inject at judging time; judge "
-        f"only from the given public tests and what each harness's trace demonstrates. Treat consensus across "
-        f"candidates as a WEAK prior, not proof: agreement correlates with correctness on easy problems but can "
-        f"be confidently wrong on hard ones (correlated errors), so don't pick a harness by vote alone. Never "
-        f"use hidden tests or the answer key. Ties -> the simpler/more general harness.\n\n"
+        f"probs={{p.qid:p for p in b.load_problems('test6',stdin_only=False)}}; p=probs['<qid>']; "
+        f"c=load_harness('<name>',p).solve(); print(b.run_code(c,p.public_tests,starter_code=p.starter_code))\".\n"
+        f"  - DIFFERENTIAL TEST: for a problem, run the public-passing candidates' programs on the SAME self-made "
+        f"inputs (b.gen_stress_inputs(p) gives legal max-constraint inputs; or write your own valid inputs) and "
+        f"compare their outputs. If two programs disagree on a legal input, at least one is WRONG — the odd one "
+        f"out is the prime suspect. For a unique-answer problem, the truly-correct programs must all agree.\n"
+        f"  - ROBUSTNESS: b.run_stress(code, b.gen_stress_inputs(p)) flags crash/TLE/empty on large inputs — a "
+        f"public-passing solution that crashes there is almost certainly hidden-wrong.\n"
+        f"  - INTENT: b.back_translate(code) says in English what the code actually computes; compare to the "
+        f"problem statement — a mismatch is a red flag.\n\n"
+        f"CAVEATS (do not be naive): the coder's errors are often CORRELATED — several independent programs can be "
+        f"identically WRONG, so agreement is a weak prior, NOT proof; never decide by majority vote alone. And a "
+        f"self-generated input can be malformed — if a program you believe is correct crashes on it, suspect the "
+        f"INPUT, not the program. Base each verdict on a check you actually ran, and prefer the harness with the "
+        f"most problems that survive your scrutiny. Never touch the hidden tests or any answer key. True ties -> "
+        f"the simpler / more general harness.\n\n"
         f"Write ONLY the chosen harness's exact NAME to `{choice_path}` (run:  echo <name> > {choice_path} ). Then STOP.")
     claude_wrapper.run(prompt=prompt, model=tk["model"], allowed_tools=PROPOSER_TOOLS, cwd=str(MH_ROOT),
                        log_dir=str(Path(tk["run_dir"]) / "claude_sessions"), name=f"judge_{tk['tag']}",
