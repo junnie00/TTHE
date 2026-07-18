@@ -1,0 +1,14 @@
+llm:
+  provider: openai
+  base_url: https://api.xiaomimimo.com/v1
+  api_key_env: OPENAI_API_KEY
+  solver_model: mimo-v2.5
+  controller_model: mimo-v2.5
+  temperature: 0.0
+  request_timeout: 120
+  thinking_style: deepseek
+  reasoning_effort: high
+dataset:
+  name: demo
+  db_id: demo
+output_dir: runs

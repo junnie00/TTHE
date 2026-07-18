@@ -29,3 +29,6 @@ venv/
 /debug_*.py
 /check_*.py
 *.bak
+/_*.py
+*/slices/single_*.json
+*/slices/lcb_all_stdin.json
