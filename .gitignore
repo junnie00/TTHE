@@ -32,3 +32,5 @@ venv/
 /_*.py
 */slices/single_*.json
 */slices/lcb_all_stdin.json
+/config.*.yaml
+!/config.example.yaml
