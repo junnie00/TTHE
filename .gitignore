@@ -34,3 +34,5 @@ venv/
 */slices/lcb_all_stdin.json
 /config.*.yaml
 !/config.example.yaml
+*.png
+*/slices/_*.json
