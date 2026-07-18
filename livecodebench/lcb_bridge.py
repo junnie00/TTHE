@@ -102,14 +102,26 @@ _STRESS_SYS = ("You write tiny self-contained Python 3 snippets that each PRINT 
                "(in the required format) for a competitive-programming problem.")
 
 
-def gen_stress_inputs(problem, k=3, gen_timeout=6):
+_STRESS_MAX_CHARS = 8_000_000    # 2e5 numbers @ ~11 chars each ~= 2.2MB; generous headroom above that
+
+
+def gen_stress_inputs(problem, k=3, gen_timeout=15):
     """The model reads the problem's CONSTRAINTS and writes k input-GENERATORS producing EXTREME / boundary
     inputs, which we execute to materialize input strings. Label-free: inputs only, no expected outputs.
-    These catch the large-N TLE / overflow / precision bugs that the few small public tests hide. Cached/qid."""
+    These catch the large-N TLE / overflow / precision bugs that the few small public tests hide. Cached/qid.
+
+    An oversized generator output is DROPPED, never truncated: a truncated input (header says N=300000 but
+    the data is cut mid-stream) is INVALID and makes even a gold-correct solution crash — that one bug
+    poisoned the whole stress signal with false 'not robust' verdicts."""
     if problem.qid in _STRESS_CACHE:
         return _STRESS_CACHE[problem.qid]
+    if getattr(problem, "starter_code", ""):
+        fmt = ("The input format for this FUNCTION-STYLE problem is: one JSON literal PER LINE, one line per "
+               "function argument (e.g. a list arg prints as [1, 2, 3] on its own line, an int arg as 7).")
+    else:
+        fmt = "Print the input in the exact stdin format the problem statement specifies."
     prompt = (f"{problem.content[:3000]}\n\nWrite {k} separate tiny Python 3 snippets. Each snippet must "
-              f"PRINT exactly ONE valid input for THIS problem to stdout, in the exact required input format. "
+              f"PRINT exactly ONE valid input for THIS problem to stdout. {fmt} "
               f"Make them STRESS a solution: (1) the MAXIMUM sizes/values allowed by the constraints; (2) a "
               f"minimal/boundary case; (3) another large adversarial case. Each snippet self-contained; print "
               f"nothing but the input; put each in its own ```python``` block.")
@@ -120,15 +132,19 @@ def gen_stress_inputs(problem, k=3, gen_timeout=6):
     inputs = []
     for s in re.findall(r"```python\s*(.*?)```", resp, re.S)[:k]:
         rc, out, _ = _run_one(s, "", gen_timeout)
-        if rc == 0 and out.strip():
-            inputs.append(out[:500000])
+        if rc == 0 and out.strip() and len(out) <= _STRESS_MAX_CHARS:
+            inputs.append(out)
     _STRESS_CACHE[problem.qid] = inputs
     return inputs
 
 
-def run_stress(code, inputs, timeout=5):
+def run_stress(code, inputs, timeout=15):
     """Run CODE on each stress input (no expected output) -- a robustness probe for TLE / crash / empty
-    output that the small public tests miss. Returns [{status, out, err}]."""
+    output that the small public tests miss. Returns [{status, out, err}].
+
+    timeout raised 5->15: on this box a CORRECT Python solution needs several seconds just for I/O+sort at
+    N=2e5, so 5s flagged gold-correct code as TIMEOUT (false positive). A real TLE (e.g. O(N^2) at large N)
+    still blows well past 15s."""
     res = []
     for inp in inputs:
         rc, so, se = _run_one(code, inp, timeout)
@@ -206,13 +222,61 @@ def _run_one(code, stdin, timeout):
         return -1, "", str(e)[:200]
 
 
-def run_code(code, tests, timeout=8):
-    """Run candidate CODE (a self-contained stdin->stdout program) against `tests`. Returns
+# ---------- execution (functional / LeetCode-type) ----------
+# A functional problem gives a `class Solution` signature instead of a stdin program: each test's `input`
+# is one JSON literal PER LINE (the call arguments) and `output` is the JSON of the expected return value.
+# We wrap the candidate in a driver that parses the args off stdin, calls the method, and prints the JSON
+# result — so the same subprocess/timeout machinery as the stdin path is reused.
+_METHOD_RE = re.compile(r"def\s+(\w+)\s*\(\s*self")
+
+
+def method_name(starter_code):
+    """The Solution method a functional problem must implement ('' if not a functional problem)."""
+    m = _METHOD_RE.search(starter_code or "")
+    return m.group(1) if m else ""
+
+
+def _functional_driver(code, meth):
+    return (
+        "from typing import List, Optional, Dict, Set, Tuple, Any\n"
+        "import json as _json, sys as _sys\n"
+        f"{code}\n\n"
+        "_args = [_json.loads(_l) for _l in _sys.stdin.read().split('\\n') if _l.strip() != '']\n"
+        f"_out = Solution().{meth}(*_args)\n"
+        "print(_json.dumps(_out))\n"
+    )
+
+
+def _json_eq(got, expected):
+    try:
+        return json.loads(got) == json.loads(expected)
+    except Exception:  # noqa: BLE001
+        return _norm(got) == _norm(expected)
+
+
+def _run_functional(code, meth, test_input, timeout):
+    return _run_one(_functional_driver(code, meth), test_input, timeout)
+
+
+def _testtype(tests):
+    return tests[0].get("testtype", "stdin") if tests else "stdin"
+
+
+def run_code(code, tests, timeout=8, starter_code=""):
+    """Run candidate CODE against `tests`. stdin problems: CODE is a self-contained stdin->stdout program.
+    functional problems (starter_code gives a `class Solution` signature): CODE implements that class and we
+    call the method with the test's JSON args, comparing the JSON return value. Returns
     {n_pass, n_total, results:[{ok, rc, stdout, stderr, input, expected}]}. Never raises."""
+    functional = _testtype(tests) == "functional"
+    meth = method_name(starter_code) if functional else ""
     results = []
     for t in tests:
-        rc, out, err = _run_one(code, t.get("input", ""), timeout)
-        ok = (rc == 0) and (_norm(out) == _norm(t.get("output", "")))
+        if functional and meth:
+            rc, out, err = _run_functional(code, meth, t.get("input", ""), timeout)
+            ok = (rc == 0) and _json_eq(out, t.get("output", ""))
+        else:
+            rc, out, err = _run_one(code, t.get("input", ""), timeout)
+            ok = (rc == 0) and (_norm(out) == _norm(t.get("output", "")))
         results.append({"ok": ok, "rc": rc, "stdout": out[:400], "stderr": err[:300],
                         "input": str(t.get("input", ""))[:160], "expected": str(t.get("output", ""))[:160]})
     return {"n_pass": sum(r["ok"] for r in results), "n_total": len(results), "results": results}
@@ -220,12 +284,22 @@ def run_code(code, tests, timeout=8):
 
 def is_correct(code, problem, timeout=6):
     """MEASUREMENT ONLY: True iff CODE passes ALL private (hidden) tests. Short-circuits on the FIRST
-    failing test so a wrong/slow solution doesn't run the whole (possibly large, slow) hidden suite."""
+    failing test so a wrong/slow solution doesn't run the whole (possibly large, slow) hidden suite.
+    Handles both stdin and functional problems."""
     priv = problem.private_tests()
     if not priv or not code:
         return False
+    functional = _testtype(priv) == "functional" or problem.testtype == "functional"
+    meth = method_name(problem.starter_code) if functional else ""
+    if functional and not meth:
+        return False                                    # cannot call an unknown method — never score it True
     for t in priv:
-        rc, out, _ = _run_one(code, t.get("input", ""), timeout)
-        if rc != 0 or _norm(out) != _norm(t.get("output", "")):
-            return False
+        if functional:
+            rc, out, _ = _run_functional(code, meth, t.get("input", ""), timeout)
+            if rc != 0 or not _json_eq(out, t.get("output", "")):
+                return False
+        else:
+            rc, out, _ = _run_one(code, t.get("input", ""), timeout)
+            if rc != 0 or _norm(out) != _norm(t.get("output", "")):
+                return False
     return True

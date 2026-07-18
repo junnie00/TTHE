@@ -17,20 +17,33 @@ from .. import lcb_bridge as bridge
 MAX_ATTEMPTS = 3
 MAX_FEEDBACK_CHARS = 600
 
-SYS = ("You are an expert competitive programmer. Read the problem and output ONE complete, self-contained "
-       "Python 3 program that reads from standard input and prints the answer to standard output, inside a "
-       "single ```python ... ``` block. No explanation outside the code block.")
+SYS_STDIN = ("You are an expert competitive programmer. Read the problem and output ONE complete, self-contained "
+             "Python 3 program that reads from standard input and prints the answer to standard output, inside a "
+             "single ```python ... ``` block. No explanation outside the code block.")
+SYS_FUNC = ("You are an expert competitive programmer. Read the problem and output the COMPLETE `class Solution` "
+            "implementing the given signature, inside a single ```python ... ``` block. Do not read stdin or print; "
+            "just return the answer from the method. No explanation outside the code block.")
+SYS = SYS_STDIN          # kept for backwards compatibility
 
 
 class ReactHarness(CodeHarness):
     def solve(self) -> str:
-        prompt = f"{self.content}\n\nWrite the complete Python 3 solution (read stdin, print stdout)."
+        # Two problem types: stdin (write a stdin->stdout program) and functional (implement the given
+        # `class Solution` signature). Same plain loop for both — only the instruction differs.
+        if self.starter_code:
+            sys_prompt = SYS_FUNC
+            task = (f"Complete this class (do not read stdin, return the answer):\n"
+                    f"```python\n{self.starter_code}\n```")
+        else:
+            sys_prompt = SYS_STDIN
+            task = "Write the complete Python 3 solution (read stdin, print stdout)."
+        prompt = f"{self.content}\n\n{task}"
         code = ""
         for _ in range(MAX_ATTEMPTS):
-            resp = self.llm(prompt, system=SYS, thinking="high")
+            resp = self.llm(prompt, system=sys_prompt, thinking="high")
             code = bridge.extract_code(resp)
             if not code:
-                prompt = (f"{self.content}\n\nYour previous reply contained no code block. "
+                prompt = (f"{self.content}\n\n{task}\n\nYour previous reply contained no code block. "
                           "Output exactly one ```python ... ``` block with the complete solution.")
                 continue
             res = self.run_public(code)
@@ -38,7 +51,6 @@ class ReactHarness(CodeHarness):
             if res["n_total"] == 0 or crash is None:    # no tests, or ran to completion everywhere -> submit
                 return code
             err = str(crash.get("stderr", "")).strip()[:MAX_FEEDBACK_CHARS] or "(non-zero exit, no stderr)"
-            prompt = (f"{self.content}\n\nYour previous program crashed when run on a sample input:\n{err}\n\n"
-                      "Fix the program and output the complete corrected Python 3 solution in one "
-                      "```python ... ``` block.")
+            prompt = (f"{self.content}\n\n{task}\n\nYour previous program crashed when run on a sample input:\n"
+                      f"{err}\n\nFix it and output the complete corrected solution in one ```python ... ``` block.")
         return code

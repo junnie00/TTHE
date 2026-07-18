@@ -62,8 +62,10 @@ class CodeHarness(ABC):
         return out
 
     def run_public(self, code):
-        """Run candidate code on the PUBLIC sample tests (label-free). Records results into the trace."""
-        res = bridge.run_code(code, self.public_tests)
+        """Run candidate code on the PUBLIC sample tests (label-free). Records results into the trace.
+        Handles both problem types: stdin (code is a stdin->stdout program) and functional (code implements
+        the `class Solution` signature in self.starter_code; the test args are called into it)."""
+        res = bridge.run_code(code, self.public_tests, starter_code=self.starter_code)
         self._trace.append({"step": "run_public", "n_pass": res["n_pass"], "n_total": res["n_total"],
                             "results": res["results"]})
         return res

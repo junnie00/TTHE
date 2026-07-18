@@ -45,6 +45,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pilot", required=True, help="json with {items:[{qid,difficulty}...]}")
     ap.add_argument("--version", default="test6")
+    ap.add_argument("--all-types", action="store_true",
+                    help="include functional (LeetCode-style) problems too, not just stdin ones")
     ap.add_argument("--group", type=int, default=2, help="G agentic generators per GENERATE round")
     ap.add_argument("--max-rounds", type=int, default=3, help="GENERATE rounds per batch")
     ap.add_argument("--batch-size", type=int, default=5)
@@ -61,7 +63,7 @@ def main():
         for f in AGENTS_DIR.glob("cand_*.py"):   # only clear generated candidates; keep seed harnesses
             f.unlink()
 
-    allp = {p.qid: p for p in bridge.load_problems(args.version, stdin_only=True)}
+    allp = {p.qid: p for p in bridge.load_problems(args.version, stdin_only=not args.all_types)}
     spec = json.load(open(args.pilot))["items"]
     items = []
     for it in spec:
