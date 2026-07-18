@@ -201,7 +201,11 @@ def main():
         items = [(args.db, qs_all[i]) for i in sel]
     golds = [bridge.gold_result(getdb(d)[0], q.gold_sql) for d, q in items]   # MEASUREMENT/DISPLAY ONLY
 
-    run_dir = PKG_DIR / "logs" / args.run_name
+    # Timestamped run dir: reusing a --run-name must never let a PREVIOUS run's traces leak into
+    # this one. Candidate names embed the run name, so a rerun of the same name produces IDENTICAL
+    # trace filenames that would silently mix with the old ones — and the proposer, pointed at the
+    # batch trace dir, would read a blend of two runs as if it were one.
+    run_dir = PKG_DIR / "logs" / f"{args.run_name}_{time.strftime('%Y%m%d_%H%M%S')}"
     run_dir.mkdir(parents=True, exist_ok=True)
     log = open(run_dir / "opt_log.jsonl", "w")
     branch_log = open(run_dir / "branch_lineage.jsonl", "w")

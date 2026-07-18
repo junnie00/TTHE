@@ -16,6 +16,7 @@ loop. Bare baseline cached per-pid in logs/bare_cache.json.
 """
 import argparse
 import json
+import time
 import os
 from concurrent.futures import ThreadPoolExecutor
 
@@ -66,7 +67,11 @@ def main():
     pids = [str(it["pid"]) if isinstance(it, dict) else str(it) for it in spec]
     items = bridge.load_problems(ids=pids)
 
-    run_dir = PKG_DIR / "logs" / args.run_name
+    # Timestamped run dir: reusing a --run-name must never let a PREVIOUS run's traces leak into
+    # this one. Candidate names embed the run name, so a rerun of the same name produces IDENTICAL
+    # trace filenames that would silently mix with the old ones — and the proposer, pointed at the
+    # batch trace dir, would read a blend of two runs as if it were one.
+    run_dir = PKG_DIR / "logs" / f"{args.run_name}_{time.strftime('%Y%m%d_%H%M%S')}"
     run_dir.mkdir(parents=True, exist_ok=True)
     log = open(run_dir / "opt_log.jsonl", "w")
     print(f"\n######### TEST-TIME harness optimization — DS-1000 (agentic, self-check signal) #########")
