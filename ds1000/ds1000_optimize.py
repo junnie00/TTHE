@@ -149,14 +149,15 @@ def main():
                     cand_results[c] = observe(c, batch, trace_dir)
                     traced.add(c)
             print(f"   batch{bi} gen-round{rnd}: {advanced}/{args.group} branches advanced", flush=True)
-        # PICK phase: the judge sees ONLY the final active branches, never the historical archive.
-        final_candidates = list(dict.fromkeys(branches))
-        for c in final_candidates:
-            if c not in traced and _loadable(c, batch[0]):
-                cand_results[c] = observe(c, batch, trace_dir)
-                traced.add(c)
+        # PICK phase — ROLLBACK GATE (ported from LCB, where it was measured). The judge chooses from EVERY
+        # harness observed this batch (the incoming H plus every round's branches), not just the final round:
+        # rounds routinely DEGRADE a good early branch, and offering only the last round silently discards it.
+        # Keeping the incoming H in the pool is the gate itself — if nothing the batch produced beats H, the
+        # judge keeps H and the accumulated harness never regresses. cand_results is insertion-ordered
+        # (H first, then r0/r1/r2 branches), so use it directly as the pool.
+        final_candidates = list(cand_results.keys())
         picked = P.pick_batch(final_candidates, trace_dir, run_dir, f"b{bi}", args.model, args.propose_timeout)
-        H = picked if picked in final_candidates else final_candidates[0]
+        H = picked if picked in final_candidates else H     # judge failure -> keep the incoming harness
         print(f"   batch{bi}: final branches={branches} ({len(final_candidates)} unique) -> JUDGE picked H={H}",
               flush=True)
         codes = cand_results.get(H)

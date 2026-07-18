@@ -41,7 +41,9 @@ _cfg = yaml.safe_load(open(_CONFIG_PATH, encoding="utf-8"))["llm"]
 _client = None
 _SOLVER_MODEL = _cfg["solver_model"]
 _REASONING = os.environ.get("DS1000_REASONING_EFFORT", _cfg.get("reasoning_effort", "high"))
-_MAX_TOKENS = int(os.environ.get("DS1000_MAX_TOKENS", "32000"))   # generous so thinking-on never truncates before the code fence
+_MAX_TOKENS = int(os.environ.get("DS1000_MAX_TOKENS", "65536"))   # 32000 was measured TOO SMALL on LCB
+# (there, a hard problem converged only at 43k reasoning tokens and returned NOTHING under a 32000 cap — a
+#  budget starvation we had mis-read as "the model cannot solve it". Same solver here, so same cap.)
 # HOW this endpoint expresses thinking (config, not model-name guessing): "deepseek" -> send the
 # {"thinking": {...}} extra_body (deepseek-v*, mimo-v*); "none" -> no toggle, use temperature.
 _THINKING_STYLE = _cfg.get("thinking_style", "deepseek")
@@ -52,7 +54,7 @@ def _get_client():
     global _client
     if _client is None:
         _client = OpenAI(base_url=_cfg["base_url"], api_key=os.environ[_cfg["api_key_env"]],
-                         timeout=float(os.environ.get("DS1000_SOLVE_TIMEOUT", "600")), max_retries=0)
+                         timeout=float(os.environ.get("DS1000_SOLVE_TIMEOUT", "1200")), max_retries=0)
     return _client
 
 

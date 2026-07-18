@@ -1,0 +1,64 @@
+{
+ "items": [
+  {
+   "qid": "arc196_b",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "arc196_c",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "arc196_a",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "arc196_d",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "3777",
+   "difficulty": "hard",
+   "testtype": "functional",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "abc400_g",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "abc399_e",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "arc195_e",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "arc195_b",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  },
+  {
+   "qid": "arc195_c",
+   "difficulty": "hard",
+   "testtype": "stdin",
+   "mimo_single_shot": false
+  }
+ ]
+}
