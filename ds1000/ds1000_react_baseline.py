@@ -31,18 +31,50 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
     cache_path = run_dir / "cache.json"
     cache = json.load(open(cache_path)) if cache_path.exists() else {}
-    harness_digest = hashlib.sha1((PKG_DIR / "agents" / f"{args.harness}.py").read_bytes()).hexdigest()[:12]
+    # The digest must cover the BRIDGE too, not just the harness file. react calls bridge.selfcheck, so a
+    # change to the bridge changes what the baseline does while leaving agents/react.py byte-identical —
+    # keying on the harness alone would silently serve results measured under the OLD bridge.
+    harness_digest = hashlib.sha1(
+        (PKG_DIR / "agents" / f"{args.harness}.py").read_bytes()
+        + (PKG_DIR / "ds1000_bridge.py").read_bytes()
+    ).hexdigest()[:12]
 
     def key(pid):
         return hashlib.sha1(f"{harness_digest}\n{pid}".encode()).hexdigest()
 
+    trace_dir = run_dir / "traces"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+
+    def write_trace(position, problem, code, correct, steps):
+        """Persist the FULL trace: problem, every coder call, every self-check, the final code, the verdict.
+        Without this the run leaves nothing to re-verify or diagnose — the score alone is not evidence."""
+        L = [f"# Baseline trace — harness `{args.harness}` — Q{position}  [{problem.pid} / {problem.library}]\n",
+             f"## PROBLEM\n{problem.prompt}\n",
+             "## WHAT THE HARNESS DID — every coder call + every self-check, in order:"]
+        for i, st in enumerate(steps, 1):
+            if st.get("step") == "coder_llm":
+                L.append(f"\n### step {i} — coder call (thinking={st.get('thinking')}, "
+                         f"max_tokens={st.get('max_tokens')})\nPROMPT:\n{str(st.get('prompt'))}\n"
+                         f"RESPONSE:\n{str(st.get('response'))}")
+            else:
+                L.append(f"\n### step {i} — self-check: ran={st.get('ran')}  "
+                         f"redefines_input={st.get('redefines')}  error={str(st.get('error'))!r}  "
+                         f"output={str(st.get('output'))!r}")
+        L.append(f"\n## FINAL CODE\n```python\n{str(code)}\n```")
+        L.append(f"\n## GOLD VERDICT (measurement only — never seen by the harness): "
+                 f"{'CORRECT' if correct else 'WRONG'}")
+        (trace_dir / f"q{position:03d}_pid{problem.pid}.md").write_text("\n".join(L), encoding="utf-8")
+
     def run_one(position, problem):
         harness = load_harness(args.harness, problem)
         code = harness.solve()
+        correct = bool(bridge.is_correct(code, problem)) if code else False
+        write_trace(position, problem, code, correct, harness._trace)
         return {
             "position": position,
             "pid": str(problem.pid),
-            "correct": bool(bridge.is_correct(code, problem)) if code else False,
+            "correct": correct,
+            "code": code,                      # persisted so the score can be INDEPENDENTLY re-verified
             "llm_calls": sum(s["step"] == "coder_llm" for s in harness._trace),
             "exec_calls": sum(s["step"] == "selfcheck" for s in harness._trace),
         }

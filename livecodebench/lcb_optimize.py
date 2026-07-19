@@ -117,7 +117,13 @@ def main():
             j, p = jp
             h = cls(p)
             code = safe_solve(h, args.solve_timeout)
-            pub = bridge.run_code(code, p.public_tests) if code else {"n_pass": 0, "n_total": len(p.public_tests), "results": []}
+            # starter_code is REQUIRED for functional (LeetCode-style) problems: without it run_code cannot
+            # resolve the method name, silently falls through to the stdin path, and executes a bare
+            # `class Solution` file that prints nothing — scoring a PERFECT solution 0/N on every functional
+            # problem. This is the trace the proposer and judge read as their primary evidence, so they were
+            # being shown a total failure for 7 of hard50's problems while the harness itself saw the truth.
+            pub = bridge.run_code(code, p.public_tests, starter_code=getattr(p, "starter_code", "")) \
+                if code else {"n_pass": 0, "n_total": len(p.public_tests), "results": []}
             write_trace(trace_dir, name, j, p, code, pub, getattr(h, "_trace", []))
             codes[j] = code
         with ThreadPoolExecutor(max_workers=min(len(batch), 8)) as ex:

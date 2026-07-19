@@ -141,16 +141,24 @@ def gen_stress_inputs(problem, k=3, gen_timeout=15):
     return inputs
 
 
-def run_stress(code, inputs, timeout=15):
+def run_stress(code, inputs, timeout=15, starter_code=""):
     """Run CODE on each stress input (no expected output) -- a robustness probe for TLE / crash / empty
     output that the small public tests miss. Returns [{status, out, err}].
 
     timeout raised 5->15: on this box a CORRECT Python solution needs several seconds just for I/O+sort at
     N=2e5, so 5s flagged gold-correct code as TIMEOUT (false positive). A real TLE (e.g. O(N^2) at large N)
-    still blows well past 15s."""
+    still blows well past 15s.
+
+    starter_code routes FUNCTIONAL problems through the same driver the grader uses. Running a `class
+    Solution` file as a plain script defines a class, prints nothing and exits, so every functional problem
+    reported CRASH on a perfectly valid input (measured: 63/63) — while the harness docs told the model
+    "a CRASH here means the solution is very likely wrong, switch algorithms". Pure absence of evidence,
+    reported as a strong negative."""
+    meth = method_name(starter_code) if starter_code else ""
     res = []
     for inp in inputs:
-        rc, so, se = _run_one(code, inp, timeout)
+        prog = _functional_driver(code, meth) if meth else code
+        rc, so, se = _run_one(prog, inp, timeout)
         st = "TIMEOUT" if rc == -9 else ("CRASH" if rc != 0 else ("EMPTY-OUTPUT" if not so.strip() else "ok"))
         res.append({"status": st, "out": so[:80], "err": se[:100]})
     return res

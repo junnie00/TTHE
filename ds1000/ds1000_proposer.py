@@ -36,7 +36,7 @@ def _check_script(new_name, batch_json):
         "    try:\n"
         f"        code = load_harness({json.dumps(new_name)}, p).solve()\n"
         "        sc = bridge.selfcheck(code, p)\n"
-        "        ran += bool(sc['ran'])\n"
+        "        ran += bool(sc['ran'])   # sc['checkable'] is False when no probe could be built\n"
         "        print('Q%d [%s/%s] ran=%s code_len=%d out=%r' % (i, it['pid'], p.library,\n"
         "              sc['ran'], len(code), str(sc['output'])[:120]))\n"
         "    except Exception:\n"
@@ -83,30 +83,81 @@ def propose_batch(tk):
         f"harness on ONE problem: the PROBLEM, every coder call (its prompt, response, and whether THINKING was "
         f"on/off), the FINAL code, the SELF-CHECK result (ran? error? output? redefines?), and a BACK-TRANSLATION. "
         f"You may READ THE SOURCE of ANY candidate at `{AGENTS_DIR}/<name>.py` to understand behavioral "
-        f"differences, but your implementation base remains `{base_candidate}` — IMPROVE it so it solves MORE of "
-        f"the batch; port a peer mechanism only when its trace evidence supports it.\n\n"
+        f"differences, but your implementation base remains `{base_candidate}` — improve it so its solutions are "
+        f"more often CORRECT; port a peer mechanism only when its trace evidence supports it.\n"
+        f"Correctness is NOT observable here, so you cannot optimise it directly. Therefore prefer a change "
+        f"justified by a REPRODUCIBLE CAUSAL MECHANISM you can point to in a trace ('the reply was indented, the "
+        f"extractor mangled it, here is the resulting SyntaxError') over a change justified by a COUNT going up. "
+        f"Counts on a 10-problem batch move by +-3 from solver nondeterminism alone: three harnesses with "
+        f"byte-identical prompts scored 6, 3 and 4 last round. A count that moves less than that measured "
+        f"nothing.\n\n"
+        f"DO NOT BREAK WHAT ALREADY WORKS. Every problem your base already handles is something you can lose, "
+        f"and a lost one costs exactly as much as a gained one. Before you ship, go problem by problem: for each "
+        f"one where your base produced a clean solution, state whether your change can alter its behaviour. If a "
+        f"mechanism can fire on a problem the base already handled, gate it so it cannot, or drop it. Last round "
+        f"nine candidates were produced; not one turned a failing problem into a passing one, and every score "
+        f"change came from breaking problems the base had already solved.\n"
+        f"A NO-CHANGE result is legitimate and often correct. You are not required to ship an edit. Shipping a "
+        f"speculative mechanism is worse than shipping nothing.\n\n"
         f"TASK CONTRACT (what the benchmark requires, not advice): DS-1000 is an INSERTION task. The problem "
         f"already DEFINES its input variables (e.g. df, a, X) inside its `<code>` block, and the graded solution "
         f"is ONLY the lines that compute `result` FROM those given variables. The hidden test re-runs the same "
-        f"solution against DIFFERENT inputs.\n\n"
+        f"solution against DIFFERENT inputs.\n"
+        f"THE WORKED EXAMPLE IN A PROBLEM STATEMENT IS ILLUSTRATIVE, NOT THE SPEC. It is frequently formatted "
+        f"differently from what the grader compares against — DS-1000 statements routinely print an ID column "
+        f"where the index appears. Never add a mechanism, system-prompt line or retry hint that pushes the coder "
+        f"to REPRODUCE the printed example: index labels, row order, column order, dtype and rounding must come "
+        f"from the problem TEXT. Measured: six candidates lost pid 75 by emitting `reset_index(drop=True)` to "
+        f"make the output look like a printed sample.\n\n"
         f"WHAT THE SELF-CHECK ACTUALLY MEASURES (know its limits): `ran` only means the snippet EXECUTED without "
         f"raising — it does NOT check that `result` is correct, because no correct answer is available anywhere "
-        f"label-free. Measured on this slice: of the solutions self-check let through, ~61% are wrong on the "
-        f"hidden test. Treat `ran=True` as a weak filter, never as proof.\n\n"
+        f"label-free. A large share of the solutions it lets through are still wrong on the hidden test. Treat "
+        f"`ran=True` as a weak filter, never as proof — and equally, do not read it as evidence that your base is "
+        f"broken and must be changed.\n\n"
         f"There is NO prescribed recipe and no menu of techniques — the design is ENTIRELY yours. The traces are "
         f"your only evidence of how each harness actually behaves. Read them, diagnose the failures YOURSELF, and "
         f"decide what (if anything) to change. Infer what helps from the trace evidence, not from assumptions.\n\n"
+        f"YOUR ACTION SPACE IS THE WHOLE PYTHON FILE, not a prompt string. `solve()` may do anything Python "
+        f"can: decompose the problem into stages, plan then implement, ask the coder several times in "
+        f"different roles, generate competing solutions and adjudicate between them, build and run your own "
+        f"tests, loop until a condition you define holds. Every candidate produced so far only tweaked the "
+        f"system prompt and the retry branch — that is a fraction of what a harness is, and it happened "
+        f"because `selfcheck` used to be the only execution available, so a boolean `ran` was the only thing "
+        f"any change could move.\n"
+        f"THAT LIMIT IS GONE: `self.run(script, timeout=15) -> (rc, stdout, stderr)` executes ANY Python you "
+        f"compose. It is how you MANUFACTURE evidence rather than only consuming it, and none of it needs an "
+        f"answer key. For instance — these are illustrations, not a menu, and you should invent better: run a "
+        f"solution on several inputs you construct from the problem prose and see whether it survives all of "
+        f"them; obtain TWO independent solutions and DIFF their outputs on the same input, since disagreement "
+        f"PROVES at least one is wrong; encode an invariant you can read straight off the problem text (a "
+        f"filter cannot lengthen its input; a sort preserves multiset; the output dtype the prose names) and "
+        f"assert it. Note the asymmetry that makes these worth having: DISAGREEMENT and violated invariants "
+        f"are near-proof of a fault, whereas agreement is weak (the frozen coder's errors are correlated — "
+        f"several attempts are routinely wrong in the SAME way).\n"
         f"Harness API — these primitives EXIST; WHETHER, WHEN and HOW to use them is entirely up to you to decide "
         f"from the traces: self.problem; self.prompt; self.library; "
         f"self.llm(prompt, system='', thinking=False|'low'|'medium'|'high', n=1) -> the frozen coder; "
-        f"self.selfcheck(code) -> {{ran, error, output, redefines}} where `redefines` lists input variables the "
+        f"self.run(script, timeout=15) -> (rc, stdout, stderr), arbitrary label-free execution; "
+        f"self.selfcheck(code) -> {{checkable, ran, error, output, redefines}}. `checkable` is False when the "
+        f"probe could NOT be built (the prompt supplies no concrete example input) — that is ABSENCE OF "
+        f"EVIDENCE, not a failed run, and treating it as a failure makes the model rewrite correct code. "
+        f"`redefines` lists input variables the "
         f"solution assigned to itself; bridge.extract_code(text); bridge.back_translate(code) -> plain-English "
-        f"description of what the code computes. GENERAL — never hardcode a problem's answer; no per-problem "
+        f"description of what the code computes. NOTE on back_translate: it is a DESCRIPTION produced by the "
+        f"same weak model, not a verdict. Any mechanism that REJECTS or REWRITES a snippet which already ran "
+        f"clean needs evidence that the rewrite is right more often than wrong, and no such evidence is "
+        f"available to you — so default to never touching a snippet that ran. "
+        f"GENERAL — never hardcode a problem's answer; no per-problem "
         f"special-casing. Keep `from ..harness_base import DS1000Harness` and "
         f"`from .. import ds1000_bridge as bridge`. Do NOT write infinite loops / catastrophic regex (they HANG).\n\n"
         f"VERIFY: edit `{cand_path}`, then run  PYTHONPATH={MH_ROOT} python {check_path}  (prints per-problem "
-        f"self-check ran-status + a SUMMARY); iterate to RAISE how many run clean without breaking others. Leave "
-        f"the final harness at EXACTLY `{cand_path}`."
+        f"self-check ran-status + a SUMMARY).\n"
+        f"THE SUMMARY COUNT IS A SMOKE TEST, NOT A SCORE. Do NOT tune your harness to raise it. It counts only "
+        f"'did not raise', it is blind to correctness, and it is dominated by solver noise — so a change that "
+        f"raises it is about as likely to be harmful as helpful. Use it for ONE purpose: confirming you did not "
+        f"introduce a crash. If you want to know whether your change did anything, run the check on the "
+        f"UNCHANGED base a few times first and look at the spread; a move smaller than that spread is not a "
+        f"result. Leave the final harness at EXACTLY `{cand_path}`."
         + (f"\n\nDIVERSITY (one of several parallel attempts): {tk.get('diversity','')}" if tk.get("diversity") else ""))
     claude_wrapper.run(prompt=prompt, model=tk["model"], allowed_tools=PROPOSER_TOOLS, cwd=str(MH_ROOT),
                        log_dir=str(Path(run_dir) / "claude_sessions"), name=f"{tag}g{gi}",
@@ -176,8 +227,14 @@ def sample_branches(branches, trace_dir, run_dir, tag, run_name, batch, model, t
 
 def run_picker(tk):
     """ONE JUDGE session: deep-read all candidates' traces, pick the harness whose solutions look most likely
-    correct from LABEL-FREE evidence (runs clean in self-check, output matches the prompt's example)."""
+    INVESTIGATE which harness is genuinely correct on the most problems. The worked example printed in a
+    problem statement is a HINT for reading the spec, NEVER an oracle: the hidden test re-runs the solution on
+    DIFFERENT inputs, and an illustrative table can disagree with the graded behaviour (measured: six
+    candidates lost pid 75 by adding `reset_index(drop=True)` to reproduce a printed example)."""
     cands, trace_dir, choice_path = tk["candidates"], tk["trace_dir"], tk["choice_path"]
+    # The harness currently in force. optimize.py builds the pool H-first, but relying on list order for
+    # something the prompt asserts as fact is too fragile — it is passed explicitly.
+    incumbent = tk.get("incumbent") or cands[0]
     cand_list = "\n".join(f"  - `{c}`  (traces: {trace_dir}/{c}__q*.md ; code: {AGENTS_DIR}/{c}.py)" for c in cands)
     prompt = (
         f"You are the JUDGE. There are {len(cands)} candidate data-science-coding harnesses (DS-1000); each ran "
@@ -197,24 +254,58 @@ def run_picker(tk):
         f"  - the recorded SELF-CHECK (ran / error / output / redefines) and BACK-TRANSLATION in each trace;\n"
         f"  - the CANDIDATE SOURCE at `{AGENTS_DIR}/<name>.py` and the solution code in the trace — read what it "
         f"actually computes and compare it clause by clause to the problem;\n"
-        f"  - your own execution: the problem's `<code>` block DEFINES the input variables, so you can re-run a "
-        f"recorded solution yourself on those inputs, or on inputs you construct, and inspect `result`.\n"
+        f"  - DIFFERENTIAL TESTING — your strongest instrument. The problem's `<code>` block DEFINES the input "
+        f"variables, so you can run SEVERAL candidates' recorded solutions for the SAME problem on the SAME "
+        f"input and diff their `result`. Where they disagree, at least one is WRONG, and that is where all your "
+        f"effort belongs. Where they all agree, the problem tells you NOTHING about which harness is better.\n"
+        f"  - INDEPENDENT RE-DERIVATION — for a disagreement, implement the problem's spec YOURSELF from the "
+        f"prose, without looking at any candidate's code, then see which side your implementation lands on. "
+        f"The statement's worked example is a HINT to check your reading against, NEVER the standard of "
+        f"correctness: it may be illustrative, inconsistently formatted, or produced by a different rule than "
+        f"the grader uses. A candidate that reproduces the printed example EXACTLY may simply have overfitted "
+        f"to it.\n"
+        f"  - `checkable=False` means NO probe could be built (the prompt supplies no concrete example input). "
+        f"That is ABSENCE OF EVIDENCE — it is NOT a failure and NOT an unsolvable problem. You MUST still "
+        f"adjudicate these: construct your own inputs from the problem prose and run the recorded solutions on "
+        f"them. In the last batch the judge silently dropped every `checkable=False` problem, called the batch "
+        f"'7 solvable', and thereby deleted the very problems that separated the top candidates. Unprobeable "
+        f"problems are the LAST thing you may set aside, not the first.\n"
         f"Do NOT re-run `solve()` to score candidates: generation is non-deterministic, so a re-run measures a "
         f"different sample, not the candidate you are judging. Judge the RECORDED solutions (re-executing those "
         f"is fine and encouraged). NEVER call b.is_correct or touch the gold test.\n\n"
         f"CAVEATS (do not be naive): DS-1000 is an INSERTION task — the hidden test re-runs the solution on "
         f"DIFFERENT inputs than the ones shown, so a solution that supplies its own data instead of using the "
         f"given variables can look perfect here and still fail. The coder's errors are also CORRELATED — several "
-        f"candidates can be identically wrong, so agreement is a weak prior, never a majority vote. Base each "
-        f"verdict on a check you actually ran or evidence you actually read, and prefer the harness with the most "
-        f"problems that survive your scrutiny. True ties -> the simpler / more general harness.\n\n"
-        f"Write ONLY the chosen harness's exact NAME to `{choice_path}` (run:  echo <name> > {choice_path} ). Then STOP.")
+        f"candidates can be identically wrong, so agreement is a weak prior, never a majority vote; the odd one "
+        f"out is a SUSPECT, not automatically the loser. If a candidate crashes on an input YOU or the "
+        f"self-check invented, suspect the INPUT before the program — the graded test supplies well-formed data.\n\n"
+        f"HOW TO WEIGH WHAT YOU FIND. Weight problems by DISCRIMINATION, not by count. A problem where exactly "
+        f"one candidate is right is worth more than five problems where everyone agrees. If you verify that one "
+        f"candidate alone solves a hard problem, that is strong evidence FOR it — do NOT let a tally over easy, "
+        f"undiscriminating problems reverse a finding you actually confirmed. (This is the exact error made last "
+        f"batch: the judge established that one candidate uniquely had the right algorithm on the hardest "
+        f"problem, then demoted it on a 5-of-7 vs 6-of-7 count and picked a harness that was joint-worst.)\n"
+        f"NEVER break a tie on ARCHITECTURE. 'more robust regex', 'better system prompt', 'more careful error "
+        f"handling', 'looks more general' describe SOURCE CODE, not OUTPUTS — that is how a judge talks itself "
+        f"into the wrong answer. If candidates are genuinely tied on measured results, go find another problem "
+        f"to discriminate on.\n"
+        f"THE INCUMBENT. `{incumbent}` is the harness currently in force — every other candidate is a CHALLENGER "
+        f"descended from it. The burden of proof is on the challenger: keep `{incumbent}` unless you can point "
+        f"to specific problems where a challenger is verifiably right and it is wrong. A tie goes to the "
+        f"incumbent. Evolution that cannot demonstrate an improvement should not be adopted.\n\n"
+        f"BEFORE you choose, write `{choice_path}.matrix`: one ROW per candidate, one COLUMN per problem in the "
+        f"batch — ALL of them, none dropped — each cell your own verdict RIGHT / WRONG / UNRESOLVED plus the "
+        f"check you ran to decide it. A cell may be UNRESOLVED; a cell may NOT be missing. Then reconcile: if "
+        f"the harness you are about to name is not the argmax of your own RIGHT counts, either your matrix or "
+        f"your conclusion is wrong — say explicitly which, and why, before proceeding.\n"
+        f"Then write ONLY the chosen harness's exact NAME to `{choice_path}` "
+        f"(run:  echo <name> > {choice_path} ). Then STOP.")
     claude_wrapper.run(prompt=prompt, model=tk["model"], allowed_tools=PROPOSER_TOOLS, cwd=str(MH_ROOT),
                        log_dir=str(Path(tk["run_dir"]) / "claude_sessions"), name=f"judge_{tk['tag']}",
                        timeout_seconds=tk["timeout"], progress=False)
 
 
-def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout):
+def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout, incumbent=None):
     if len(candidates) <= 1:
         return candidates[0] if candidates else None
     choice_path = Path(run_dir) / f"judge_{tag}.txt"
@@ -222,7 +313,8 @@ def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout):
     tpath = Path(run_dir) / f"judgetask_{tag}.json"
     tpath.write_text(json.dumps({"candidates": candidates, "trace_dir": str(trace_dir),
                                  "choice_path": str(choice_path), "run_dir": str(run_dir), "tag": tag,
-                                 "model": model, "timeout": timeout}))
+                                 "model": model, "timeout": timeout,
+                                 "incumbent": incumbent or candidates[0]}))
     p = subprocess.Popen([sys.executable, "-u", "-m", f"{PKG}.ds1000_proposer", "--picker", str(tpath)],
                          cwd=str(MH_ROOT), start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

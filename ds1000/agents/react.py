@@ -34,7 +34,10 @@ class ReactHarness(DS1000Harness):
                           "```python ... ``` block computing `result`.")
                 continue
             sc = self.selfcheck(code)
-            if sc["ran"]:                              # executed without error -> submit (output not checked)
+            # `checkable=False` = the probe could not be BUILT (the prompt gives no concrete example input),
+            # so there is NO evidence either way. Retrying on it would feed the model a fabricated error and
+            # make it "fix" code that was never shown to be broken — submit as-is instead.
+            if sc["ran"] or not sc.get("checkable", True):
                 return code
             prompt = (self.prompt + "\n\nYour previous snippet raised an error when executed on the example "
                       "input:\n" + str(sc.get("error", ""))[:600]

@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import ds1000_bridge as bridge
 from . import ds1000_proposer as P
 from .ds1000_common import load_harness, PKG_DIR, AGENTS_DIR
+from audit_harness import audit_file
 
 _SOLVE_POOL = ThreadPoolExecutor(max_workers=32)
 
@@ -36,11 +37,26 @@ def safe_solve(h, timeout):
 
 
 def _loadable(name, problem):
+    """A candidate is admissible only if it IMPORTS and passes the TTHE invariant audit.
+
+    The audit was written but never wired in: all four domains' harness_base docstrings claim
+    "audit_harness.py checks them", and nothing called it, so FROZEN-SOLVER and LABEL-FREE were honour-system
+    only. That was tolerable while `selfcheck` was the harness's sole execution primitive; now that a harness
+    can run arbitrary code it is not, because reading `problem.code_context` and grading against it would be
+    both easy and invisible. A violating candidate is rejected here, which leaves its branch at its parent."""
     try:
         load_harness(name, problem)
-        return True
     except Exception:
         return False
+    try:
+        bad = [v for v in audit_file(AGENTS_DIR / f"{name}.py") if v["rule"] != "PARSE"]
+    except Exception:  # noqa: BLE001
+        return True                       # auditor failure must not silently reject a valid candidate
+    if bad:
+        print(f"   [audit] REJECTED {name}: " +
+              "; ".join(f"{v['rule']} line {v['line']}: {v['detail']}" for v in bad[:4]), flush=True)
+        return False
+    return True
 
 
 def main():
@@ -87,15 +103,30 @@ def main():
              "## WHAT THE HARNESS DID — every coder call + every self-check, in order:"]
         for i, st in enumerate(steps, 1):
             if st.get("step") == "coder_llm":
-                L.append(f"\n### step {i} — coder call (thinking={st.get('thinking')})\nPROMPT:\n{str(st.get('prompt'))[:1200]}\n"
+                # Show the HEAD and the TAIL of the prompt. A flat [:1200] cut kept only the problem statement
+                # — which the proposer already knows — and always discarded the tail, where the harness's OWN
+                # appended retry hints and error diagnoses live. A proposer writing those hints could therefore
+                # never observe their effect in any trace, and was editing them blind.
+                pr = str(st.get("prompt"))
+                shown = pr if len(pr) <= 2600 else (pr[:900] + f"\n\n... [{len(pr) - 2600} chars of problem "
+                                                    f"statement elided] ...\n\n" + pr[-1700:])
+                L.append(f"\n### step {i} — coder call (thinking={st.get('thinking')})\nPROMPT:\n{shown}\n"
                          f"RESPONSE:\n{str(st.get('response'))[:4000]}")
+            elif st.get("step") == "run":
+                # The harness's SELF-MADE evidence. Show it in full-ish: this is the only place a proposer can
+                # see whether a signal a candidate invented actually discriminated anything.
+                L.append(f"\n### step {i} — harness-built check (rc={st.get('rc')})\nSCRIPT:\n"
+                         f"{str(st.get('script'))[:1500]}\nSTDOUT:\n{str(st.get('stdout'))[:800]}\n"
+                         f"STDERR:\n{str(st.get('stderr'))[:400]}")
             else:
                 L.append(f"\n### step {i} — self-check: ran={st.get('ran')}  redefines_input={st.get('redefines')}  "
                          f"error={str(st.get('error'))[:200]!r}  output={str(st.get('output'))[:200]!r}")
         # FINAL CODE must be COMPLETE — the proposer diagnoses it; a mid-statement cut reads as a phantom bug.
         L.append(f"\n## FINAL CODE\n```python\n{str(code)}\n```")
         L.append(f"\n## SELF-CHECK (LABEL-FREE — the gold hidden test is NEVER shown; this is the only execution "
-                 f"evidence):\n  ran={sc.get('ran')}\n  redefines_input={sc.get('redefines')}  "
+                 f"evidence):\n  checkable={sc.get('checkable', True)}  (False = NO example input exists in the "
+                 f"prompt, so NOTHING could be executed — this is ABSENCE OF EVIDENCE, NOT a failure; do not "
+                 f"treat it as a wrong answer)\n  ran={sc.get('ran')}\n  redefines_input={sc.get('redefines')}  "
                  f"(NON-EMPTY = the solution HARDCODES these input variables instead of using the provided ones "
                  f"-> runs here but FAILS the hidden test, which supplies different inputs; a near-certain WRONG)"
                  f"\n  error={str(sc.get('error'))[:600]!r}\n  output={str(sc.get('output'))[:600]!r}")
@@ -113,7 +144,8 @@ def main():
             j, p = jp
             h = cls(p)
             code = safe_solve(h, args.solve_timeout)
-            sc = bridge.selfcheck(code, p) if code else {"ran": False, "error": "(no code)", "output": "", "redefines": []}
+            sc = bridge.selfcheck(code, p) if code else {"checkable": True, "ran": False, "error": "(no code)",
+                                                         "output": "", "redefines": []}
             write_trace(trace_dir, name, j, p, code, sc, getattr(h, "_trace", []))
             codes[j] = code
         with ThreadPoolExecutor(max_workers=min(len(batch), 8)) as ex:
@@ -161,7 +193,10 @@ def main():
         # judge keeps H and the accumulated harness never regresses. cand_results is insertion-ordered
         # (H first, then r0/r1/r2 branches), so use it directly as the pool.
         final_candidates = list(cand_results.keys())
-        picked = P.pick_batch(final_candidates, trace_dir, run_dir, f"b{bi}", args.model, args.propose_timeout)
+        # H is the incumbent: the judge must be told which candidate is currently in force, so that the
+        # burden of proof sits on the challengers instead of all candidates being treated as symmetric.
+        picked = P.pick_batch(final_candidates, trace_dir, run_dir, f"b{bi}", args.model,
+                              args.propose_timeout, incumbent=H)
         H = picked if picked in final_candidates else H     # judge failure -> keep the incoming harness
         print(f"   batch{bi}: final branches={branches} ({len(final_candidates)} unique) -> JUDGE picked H={H}",
               flush=True)

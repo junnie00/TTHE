@@ -31,7 +31,11 @@ class DS1000Harness(ABC):
         self.library        — pandas / numpy / scipy / sklearn / pytorch / tensorflow / matplotlib
         self.llm(prompt, system='', thinking=False, n=1, max_tokens=None)  — the frozen solver. thinking=False
             (default) is fast; 'low'|'medium'|'high' enables it. max_tokens=None is the default cap.
-        self.selfcheck(code) -> {ran, error, output}       — LABEL-FREE: run code on a constructed example input
+        self.run(script, timeout=15) -> (rc, stdout, stderr)  — LABEL-FREE arbitrary execution. Build your
+            OWN evidence with it: several constructed inputs, differential tests between two solutions,
+            self-written invariant assertions. Never put the gold test in it.
+        self.selfcheck(code) -> {checkable, ran, error, output}  — LABEL-FREE probe. checkable=False means it
+            could not be BUILT (no concrete example input in the prompt) = NO EVIDENCE, not a failure
         bridge.extract_code(text) -> str                   — pull a ```python``` block from a reply
     solve() must return the final solution-snippet string.
     """
@@ -41,23 +45,50 @@ class DS1000Harness(ABC):
         self.prompt = problem.prompt
         self.library = problem.library
         self._trace = []          # FULL trace: every coder call (+ thinking choice) + every self-check
+        self._call_seq = {}       # (request signature) -> how many times THIS instance already issued it
 
     def llm(self, prompt, system="", thinking=False, n=1, max_tokens=None):
         """Call the frozen coder. thinking=False -> no thinking (fast); 'low'/'medium'/'high' -> think at that
         effort. max_tokens=None -> the default output cap; raise it if replies get cut off before the code
         fence. Both choices are recorded in the trace so the proposer can see/evolve them."""
-        out = bridge.solver_llm(prompt, system=system, n=n, thinking=thinking, max_tokens=max_tokens)
+        # seq = how many times THIS harness instance already issued this exact request. Asking the same thing
+        # twice on purpose (e.g. to vote) still gets two different replies; asking it once gets the same reply
+        # any other harness would get, so identical prompts can no longer produce spurious score differences.
+        sig = (prompt, system, str(thinking), max_tokens, n)
+        seq = self._call_seq.get(sig, 0)
+        self._call_seq[sig] = seq + 1
+        out = bridge.solver_llm(prompt, system=system, n=n, thinking=thinking, max_tokens=max_tokens, seq=seq)
         self._trace.append({"step": "coder_llm", "thinking": thinking, "max_tokens": max_tokens,
                             "system": system, "prompt": prompt,
                             "response": out if isinstance(out, str) else list(out)})
         return out
+
+    def run(self, script, timeout=15):
+        """LABEL-FREE general execution: run any Python `script` you compose -> (rc, stdout, stderr).
+
+        `selfcheck` answers exactly one fixed question. This answers whatever question you can write code for,
+        and it is how you MANUFACTURE EVIDENCE instead of only consuming it. Examples of signals it makes
+        reachable, none of which need an answer key:
+          * ROBUSTNESS — run one solution on several inputs you construct from the problem prose; a solution
+            that works on one shape and crashes or degenerates on another is suspect.
+          * DIFFERENTIAL — ask the coder twice (or ask for two different approaches), run BOTH on the same
+            input and diff the results. Disagreement proves at least one is wrong. Agreement is weak evidence
+            (the coder's errors correlate), never proof.
+          * SELF-WRITTEN ASSERTIONS — encode invariants you can read off the problem text (output length,
+            dtype, monotonicity, that a filter never grows the input) and execute them.
+        Every call is recorded in the trace. NEVER put the gold test in here — no `code_context`, no
+        `is_correct`, no `reference_code`; audit_harness.py rejects a candidate that does."""
+        rc, out, err = bridge.run_script(script, timeout)
+        self._trace.append({"step": "run", "script": script, "rc": rc, "stdout": out, "stderr": err})
+        return rc, out, err
 
     def selfcheck(self, code):
         """LABEL-FREE: run the candidate against the problem's own <code> input setup and observe whether it
         runs, what `result` it produces, and whether it HARDCODES (redefines) the input variables. Records
         into the trace. Never uses gold."""
         sc = bridge.selfcheck(code, self.problem)
-        self._trace.append({"step": "selfcheck", "ran": sc["ran"], "error": sc["error"], "output": sc["output"],
+        self._trace.append({"step": "selfcheck", "checkable": sc.get("checkable", True),
+                            "ran": sc["ran"], "error": sc["error"], "output": sc["output"],
                             "redefines": sc.get("redefines", [])})
         return sc
 

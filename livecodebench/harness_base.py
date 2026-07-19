@@ -75,7 +75,8 @@ class CodeHarness(ABC):
         large-N TLE, integer-overflow, and float-precision bugs that the few small public tests miss. On a
         TIMEOUT/CRASH here, the solution is very likely wrong on the hidden suite -- switch to a faster or
         numerically-correct algorithm. Records into the trace."""
-        res = bridge.run_stress(code, bridge.gen_stress_inputs(self.problem))
+        res = bridge.run_stress(code, bridge.gen_stress_inputs(self.problem),
+                                starter_code=getattr(self.problem, 'starter_code', ''))
         nrob = sum(r["status"] == "ok" for r in res)
         self._trace.append({"step": "stress", "n_robust": nrob, "n_total": len(res),
                             "statuses": [r["status"] for r in res]})

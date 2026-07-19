@@ -9,11 +9,15 @@ example input, run the candidate, observe whether it runs and what `result` it p
 ONLY) = the shipped `code_context` test harness. Data: load_dataset("xlangai/DS-1000", split="test").
 """
 import ast
+import threading
+import hashlib
+import json
 import os
 import re
 import sys
 import subprocess
 import tempfile
+import textwrap
 from dataclasses import dataclass
 
 # Monorepo root = parent of this domain's directory. The shared `ase` package lives at REPO_ROOT/ase.
@@ -28,10 +32,26 @@ from ase.llm import extract_code as _raw_extract_code                         # 
 
 def extract_code(text):
     """ase extractor + strip stray language-tag / fence lines (`python`, ```` ``` ````) the model sometimes
-    leaves inside the block, which would otherwise corrupt the snippet (SyntaxError / NameError)."""
+    leaves inside the block, which would otherwise corrupt the snippet (SyntaxError / NameError).
+
+    REPAIR THE FIRST-LINE DEDENT. `ase.llm.extract_code` ends in `.strip()`, which strips the whole block
+    string and therefore eats the leading whitespace of the FIRST LINE ONLY. A reply whose body is uniformly
+    indented — very common on DS-1000's function-body problems, where the coder is asked for an indented
+    block — arrives here with line 0 at column 0 and every other line still indented, which is a guaranteed
+    `IndentationError: unexpected indent`. Correct solutions were destroyed by this and the harness then fed
+    the syntax error back as though the model's algorithm were at fault.
+
+    Restore line 0's indentation to match its successors, then dedent uniformly."""
     code = _raw_extract_code(text) or ""
     keep = [ln for ln in code.splitlines() if ln.strip() not in ("```", "```python", "python", "py")]
-    return "\n".join(keep).strip()
+    if not keep:
+        return ""
+    rest = [ln for ln in keep[1:] if ln.strip()]
+    if rest and not keep[0][:1].isspace() and keep[0].strip():
+        pad = min(len(ln) - len(ln.lstrip()) for ln in rest)
+        if pad > 0:                       # line 0 lost exactly this much to the upstream .strip()
+            keep[0] = " " * pad + keep[0]
+    return textwrap.dedent("\n".join(keep).strip("\n")).rstrip()
 
 
 _CONFIG_PATH = os.environ.get("TTHE_CONFIG", os.path.join(REPO_ROOT, "config.yaml"))
@@ -58,11 +78,53 @@ def _get_client():
     return _client
 
 
-def solver_llm(prompt, system="", n=1, thinking=False, max_tokens=None):
+_CACHE_PATH = os.environ.get("DS1000_SOLVER_CACHE", os.path.join(os.path.dirname(__file__), "logs",
+                                                                 "solver_cache.json"))
+_CACHE_LOCK = threading.Lock()
+_CACHE = None
+
+
+def _cache():
+    """Disk-backed cache of FROZEN-solver replies, shared by every harness in a run.
+
+    Why this exists (measured on ds_b0_fixed batch0): of 134 coder calls, only 27 prompts were DISTINCT —
+    one identical prompt was issued 20 times. Candidates that never touched the prompt-building code were
+    therefore asked the SAME question and handed DIFFERENT answers, because thinking mode is nondeterministic
+    even at temperature 0. react, b0r0_g0 and b0r0_g2 have byte-identical SYS and byte-identical prompts on
+    all four discriminating problems, yet scored 6/10, 3/10 and 4/10. That +-3 spread is pure sampling, and it
+    is larger than any effect the loop is trying to detect.
+
+    With the cache, harnesses that ask the same thing get the same answer, so a score difference can only come
+    from a real mechanism difference — and the run costs ~20% of what it did."""
+    global _CACHE
+    if _CACHE is None:
+        with _CACHE_LOCK:
+            if _CACHE is None:
+                try:
+                    _CACHE = json.load(open(_CACHE_PATH, encoding="utf-8"))
+                except Exception:  # noqa: BLE001
+                    _CACHE = {}
+    return _CACHE
+
+
+def _cache_key(prompt, system, thinking, mt, seq):
+    """`seq` = how many times THIS harness instance has already issued this exact request.
+
+    It is what keeps the cache from destroying deliberate resampling: a harness that asks the same question
+    three times to vote over the answers gets seq=0,1,2 -> three DIFFERENT cached replies, and any other
+    harness doing the same thing gets the same three. Dropping seq would collapse all three into one answer
+    and silently delete the mechanism."""
+    blob = json.dumps([prompt, system, str(thinking), mt, seq], ensure_ascii=False)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+def solver_llm(prompt, system="", n=1, thinking=False, max_tokens=None, seq=0):
     """FROZEN weak solver. THINKING IS HARNESS-CONTROLLED: thinking=False -> disabled (sane default — the
     weak model over-thinks and emits NO code); 'low'|'medium'|'high' -> enabled at that effort.
     max_tokens is HARNESS-CONTROLLED too (None -> DS1000_MAX_TOKENS default); the output cap bounds a
-    think-forever call. n=1 -> str, n>1 -> list[str]."""
+    think-forever call. n=1 -> str, n>1 -> list[str].
+
+    Replies are CACHED on (prompt, system, thinking, max_tokens, seq) — see _cache()."""
     msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
     mt = _MAX_TOKENS if max_tokens is None else int(max_tokens)
     kw = dict(model=_SOLVER_MODEL, messages=msgs, max_tokens=mt)
@@ -87,7 +149,27 @@ def solver_llm(prompt, system="", n=1, thinking=False, max_tokens=None):
                 if attempt == 1:
                     return ""
                 time.sleep(2.0)
-    outs = [one() for _ in range(max(n, 1))]
+    outs = []
+    for i in range(max(n, 1)):
+        # Each of the n samples is its own cache slot: n>1 is a harness ASKING for diversity, so slot i must
+        # stay distinct, while a second harness issuing the same n>1 request reuses the same i answers.
+        k = _cache_key(prompt, system, thinking, mt, (seq, i))
+        c = _cache()
+        if k in c:
+            outs.append(c[k])
+            continue
+        v = one()
+        with _CACHE_LOCK:
+            c[k] = v
+            try:
+                os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
+                tmp = _CACHE_PATH + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(c, fh)
+                os.replace(tmp, _CACHE_PATH)     # atomic: concurrent harnesses must never read a half file
+            except Exception:  # noqa: BLE001
+                pass
+        outs.append(v)
     return outs[0] if n == 1 else outs
 
 
@@ -158,6 +240,22 @@ def _run_script(script, timeout):
             os.unlink(path)
         except OSError:
             pass
+
+
+def run_script(script, timeout=15):
+    """LABEL-FREE general execution: run an arbitrary Python `script` in a subprocess -> (rc, stdout, stderr).
+
+    This is the primitive a harness needs to MANUFACTURE ITS OWN EVIDENCE, and its absence is why every
+    evolved candidate so far only tinkered with prompts and retry logic: `selfcheck` was the sole execution
+    the API offered, `ran` was therefore the only observable, and the only failure mode that both moves `ran`
+    and is fixable label-free is a syntax/indentation error. Everything deeper — decomposition, planning,
+    self-written tests — produced no observable at all, so it could never be selected for.
+
+    With this, a harness can build signals of its own: run one solution on several self-constructed inputs and
+    check it does not crash or degenerate; generate TWO independent solutions and DIFF their outputs on the
+    same input (disagreement proves at least one is wrong, with no gold involved); write and execute its own
+    assertions. It carries no answer key — what is executed is whatever the harness composed."""
+    return _run_script(script, timeout)
 
 
 def is_correct(solution, problem, timeout=20):
@@ -233,6 +331,58 @@ def _strip_trailing_stub(setup):
     return setup
 
 
+def _example_assignments(setup):
+    """name -> the COMPLETE source of the statement assigning it, in the prompt's example setup.
+
+    Must be AST-based, not line-based: DS-1000 example inputs are routinely multi-line
+    (`df = pd.DataFrame({\\n  'a': [...],\\n})`), and grabbing only the first line yields a
+    syntactically broken fragment — measured to DOUBLE the false-kill rate versus doing nothing."""
+    try:
+        tree = ast.parse(setup)
+    except SyntaxError:
+        return {}
+    out = {}
+    for order, node in enumerate(tree.body):
+        if isinstance(node, ast.Assign):
+            src = ast.get_source_segment(setup, node)
+            if not src:
+                continue
+            deps = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    out[t.id] = {"src": src, "deps": deps, "order": order}
+    return out
+
+
+def _example_closure(examples, names):
+    """Sources needed to define `names`, INCLUDING their transitive dependencies, in setup order.
+
+    Example setups chain: `d = {...}` then `df = pd.DataFrame(d)`. Emitting only the `df` line leaves `d`
+    unbound (measured: 3 more gold solutions rejected with a NameError the solution had nothing to do with).
+    Returns (sources, unresolved-names)."""
+    need, seen, missing = set(), set(), []
+    stack = list(names)
+    while stack:
+        nm = stack.pop()
+        if nm in seen:
+            continue
+        seen.add(nm)
+        ent = examples.get(nm)
+        if not ent:
+            continue
+        need.add(nm)
+        for d in ent["deps"]:
+            if d in examples and d not in seen:
+                stack.append(d)
+    srcs = [examples[n]["src"] for n in sorted(need, key=lambda n: examples[n]["order"])]
+    return srcs, missing
+
+
+# A setup line like `df = load_data()` is DS-1000 saying "the data arrives here"; the function is never
+# shipped. Such a name has NO concrete example value, so the solution cannot be exercised label-free.
+_PLACEHOLDER_CALL = re.compile(r"\b(load_data|load_iris|load_digits|fetch_\w+)\s*\(")
+
+
 def _exec_template(problem):
     """The benchmark's own CALLING CONVENTION for this problem: the `exec_context` string, which shows where
     the solution is inserted (e.g. inside `def f(df):`) and how `result` is produced. This is STRUCTURE only —
@@ -255,59 +405,73 @@ def selfcheck(solution, problem, timeout=12):
     self-check-approved solutions that fail the hidden test. Falls back to the standalone form when the
     problem ships no usable template.
 
-    Returns {ran, error, output, redefines, result_none_by_design}; `redefines` lists input variables the
-    solution reassigns, and `result_none_by_design` is True for plotting problems whose template ends in
-    `result = None` (graded from the saved figure), so an empty `result` there is expected, not a failure."""
+    THREE outcomes, not two. `checkable=False` means the probe could not be BUILT — the template's inputs
+    have no concrete example value in the prompt (`df = load_data()` is DS-1000's placeholder for "the data
+    arrives here"; the function is never shipped). That is ABSENCE OF EVIDENCE and must never be reported as
+    `ran=False`: a harness that feeds a fabricated error back to the model makes it "fix" correct code.
+    Measured on hard50: 16/50 problems are unbuildable this way, and the old code reported every one of them
+    as an execution failure.
+
+    Returns {checkable, ran, error, output, redefines, result_none_by_design}; `redefines` lists input
+    variables the solution reassigns, and `result_none_by_design` is True for plotting problems whose template
+    ends in `result = None` (graded from the saved figure), so an empty `result` there is expected."""
     if not solution:
-        return {"ran": False, "error": "(no solution code)", "output": "", "redefines": [],
-                "result_none_by_design": False}
+        return {"checkable": True, "ran": False, "error": "(no solution code)", "output": "",
+                "redefines": [], "result_none_by_design": False}
     setup = _prompt_setup(problem)
     sol = "\n".join(ln for ln in solution.splitlines() if ln.strip() not in ("```", "```python", "python"))
     redef = _redefines_input(setup, sol) if setup else []
-
     tmpl = _exec_template(problem)
-    script = ""
-    if tmpl and "[insert]" in tmpl:
-        # Every name the template takes from the hidden test_input must be obtainable from the prompt's
-        # example setup instead — either defined there directly, or as example_<name>. If any name cannot be
-        # bound label-free, fall back rather than guess.
-        ok = True
-        for names in re.findall(r"^(.+?)\s*=\s*test_input\s*$", tmpl, re.M):
-            for nm in [n.strip() for n in names.split(",")]:
-                # A setup line like `df = load_data()` is a PLACEHOLDER: DS-1000 uses it to say "the data
-                # arrives here" without shipping load_data, so treating it as a real definition leaves the
-                # name unbound and the run dies with NameError. Only concrete assignments count.
-                m_def = re.search(rf"^\s*{re.escape(nm)}\s*=\s*(.+)$", setup, re.M)
-                concrete = bool(m_def) and "load_data(" not in m_def.group(1)
-                if not (concrete or re.search(rf"^\s*example_{re.escape(nm)}\s*=", setup, re.M)):
-                    ok = False
-        if ok:
-            # Substitute the hidden-input line IN PLACE (never delete it, never hoist the binding to the
-            # top): its position matters. In a function-body problem the template reads
-            #   def f(df):\n[insert]\ndf = test_input\nresult = f(df)
-            # so `df = test_input` sits AFTER the function at module level — moving that assignment above
-            # the def, or dropping the line and prepending the binding, breaks the indentation.
-            def _bind_line(mo):
-                names = [n.strip() for n in mo.group(1).split(",")]
-                pairs = [f"{n} = example_{n}" for n in names
-                         if not re.search(rf"^\s*{re.escape(n)}\s*=", setup, re.M)]
-                return "\n".join(pairs)                      # '' when the setup already defines them
-            body = re.sub(r"^(.+?)\s*=\s*test_input\s*$", _bind_line, tmpl, flags=re.M)
-            body = body.replace("[insert]", sol)
-            script = (f"{setup}\n{body}\n"
-                      "try:\n    print(repr(result))\n"
-                      "except NameError:\n    print('(no `result` variable set)')\n")
-    if not script:                                              # no usable template -> previous behaviour
-        script = f"{setup}\n{sol}\ntry:\n    print(repr(result))\nexcept NameError:\n    print('(no `result` variable set)')\n"
-
-    # Plotting problems end their OWN template with `result = None` and are graded from the saved figure, so
-    # a None result there is the template speaking, not a failing solution. Flag it, or every correct
-    # Matplotlib answer reads as "produced nothing".
     none_by_design = bool(re.search(r"^\s*result\s*=\s*None\s*$", tmpl, re.M)) if tmpl else False
+    unbuildable = {"checkable": False, "ran": False, "error": "", "output": "", "redefines": redef,
+                   "result_none_by_design": none_by_design}
+    if not (tmpl and "[insert]" in tmpl):
+        return {**unbuildable, "error": "(problem ships no exec_context template)"}
+
+    # Build the probe from the TEMPLATE ALONE. The prompt's setup is NOT prepended: it restates the
+    # template's own imports and intermediate variables, so concatenating the two executed everything twice
+    # and tore open block structure (measured: 11/50 gold solutions rejected with IndentationError/NameError).
+    # The template is already complete except for the hidden inputs — so bind ONLY those, from the example.
+    examples = _example_assignments(setup)
+    missing = []
+
+    def _bind_line(mo):
+        """Rewrite `df, y = test_input` in place, into concrete example assignments. Position matters: in a
+        function-body problem the line sits AFTER the `def` at module level, so it must not be hoisted."""
+        out = []
+        for name in [n.strip() for n in mo.group(1).split(",")]:
+            key = f"example_{name}" if f"example_{name}" in examples else name
+            ent = examples.get(key)
+            if not ent or _PLACEHOLDER_CALL.search(ent["src"]):
+                missing.append(name)
+                out.append(f"{name} = None")
+                continue
+            # Emit the whole dependency chain, then the binding itself under the template's name.
+            srcs, _ = _example_closure(examples, [key])
+            for s in srcs:
+                out.append(s if s != ent["src"] else
+                           re.sub(rf"^\s*(example_)?{re.escape(name)}\s*=", f"{name} =", s, count=1))
+        return "\n".join(out)
+
+    body = re.sub(r"^(.+?)\s*=\s*test_input\s*$", _bind_line, tmpl, flags=re.M)
+    if missing:
+        return {**unbuildable,
+                "error": f"(no example value in the prompt for {sorted(set(missing))} — cannot probe label-free)"}
+    script = (body.replace("[insert]", sol)
+              + "\ntry:\n    print(repr(result))\nexcept NameError:\n    print('(no `result` variable set)')\n")
 
     rc, out, err = _run_script(script, timeout)
-    if rc == 0:
-        return {"ran": True, "error": "", "output": out[:1000], "redefines": redef,
-                "result_none_by_design": none_by_design}
-    return {"ran": False, "error": (("TIMEOUT" if rc == -9 else err) or "")[:600], "output": out[:1000],
-            "redefines": redef, "result_none_by_design": none_by_design}
+    if rc != 0:
+        # A NameError for a template-supplied name means the probe itself is malformed, not the solution.
+        if "NameError" in err and not re.search(r"NameError.*'(" + "|".join(map(re.escape, examples)) + r")'", err):
+            return {**unbuildable, "error": f"(probe could not be built: {err.strip().splitlines()[-1][:200]})"}
+        return {"checkable": True, "ran": False, "error": (("TIMEOUT" if rc == -9 else err) or "")[:600],
+                "output": out[:1000], "redefines": redef, "result_none_by_design": none_by_design}
+    # Producing no `result` (or a None one, outside plotting problems) is a REAL negative: the template ran
+    # to completion and the solution still set nothing. Previously this returned ran=True.
+    empty = "(no `result` variable set)" in out or out.strip() == "None"
+    if empty and not none_by_design:
+        return {"checkable": True, "ran": False, "error": "(solution set no `result`)", "output": out[:1000],
+                "redefines": redef, "result_none_by_design": False}
+    return {"checkable": True, "ran": True, "error": "", "output": out[:1000], "redefines": redef,
+            "result_none_by_design": none_by_design}
