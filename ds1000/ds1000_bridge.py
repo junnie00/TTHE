@@ -200,21 +200,114 @@ def _redefines_input(setup, sol):
         return []
 
 
-def selfcheck(solution, problem, timeout=12):
-    """LABEL-FREE health probe — DETERMINISTIC, no model-written driver. DS-1000 prompts ship the input-setup
-    code in a <code>...</code> block (the model is asked to fill in the solution after it); we run that
-    setup + the candidate `solution` + print(result) in a subprocess, exactly like executing a SQL query
-    against the provided database. Never touches code_context/reference_code (the gold). Returns
-    {ran, error, output, redefines}. `redefines` lists input variables the solution HARDCODES instead of
-    using (a contract violation that passes self-check but fails the hidden test) — a key correctness flag."""
-    if not solution:
-        return {"ran": False, "error": "(no solution code)", "output": "", "redefines": []}
+def _prompt_setup(problem):
+    """The example input-setup the model is shown. Normally a <code>...</code> block; some problems omit the
+    closing tag, so fall back to everything before the solution marker."""
     m = re.search(r"<code>(.*?)</code>", problem.prompt, re.DOTALL)
-    setup = m.group(1).strip() if m else ""
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"<code>(.*)", problem.prompt, re.DOTALL)
+    if not m:
+        return ""
+    body = m.group(1)
+    for marker in ("### BEGIN SOLUTION", "BEGIN SOLUTION", "# SOLUTION START"):
+        if marker in body:
+            body = body.split(marker)[0]
+            break
+    return _strip_trailing_stub(body.strip())
+
+
+def _strip_trailing_stub(setup):
+    """Drop a trailing, bodyless `def f(df=example_df):` stub from an extracted setup.
+
+    Function-body problems end their prompt with the stub the solution is meant to fill. Keeping it makes the
+    setup end inside an open block, so anything appended afterwards is parsed as that function's body and
+    raises IndentationError. Only the concrete input definitions above it are wanted here — the real function
+    header comes from the benchmark's own exec_context template."""
+    lines = setup.splitlines()
+    for i, ln in enumerate(lines):
+        if re.match(r"^\s*def\s+\w+\s*\(", ln):
+            rest = [x for x in lines[i + 1:] if x.strip() and not x.strip().startswith("#")]
+            if not rest:                       # nothing but comments after the header -> it is a stub
+                return "\n".join(lines[:i]).rstrip()
+    return setup
+
+
+def _exec_template(problem):
+    """The benchmark's own CALLING CONVENTION for this problem: the `exec_context` string, which shows where
+    the solution is inserted (e.g. inside `def f(df):`) and how `result` is produced. This is STRUCTURE only —
+    it holds no expected answer (those live in generate_ans / define_test_input, which we never touch)."""
+    m = re.search(r'exec_context\s*=\s*r?"""(.*?)"""', problem.code_context, re.DOTALL)
+    return m.group(1) if m else ""
+
+
+def selfcheck(solution, problem, timeout=12):
+    """LABEL-FREE health probe — DETERMINISTIC, no model-written driver.
+
+    Runs the candidate THE WAY THE BENCHMARK WILL: the solution is placed at `[insert]` inside the problem's
+    own `exec_context` template, so a function-body problem is executed as a function body, and `result` is
+    produced by the template's own final line. The inputs come from the EXAMPLE setup shown in the prompt —
+    never from define_test_input — and nothing is ever compared against generate_ans. Gold stays untouched.
+
+    Why this matters (measured): running the snippet standalone instead let a solution that hardcodes its own
+    copy of the input and never returns anything execute cleanly and be reported healthy, while inserting the
+    SAME code into the real template produced None. That single mismatch is a large share of the ~61% of
+    self-check-approved solutions that fail the hidden test. Falls back to the standalone form when the
+    problem ships no usable template.
+
+    Returns {ran, error, output, redefines, result_none_by_design}; `redefines` lists input variables the
+    solution reassigns, and `result_none_by_design` is True for plotting problems whose template ends in
+    `result = None` (graded from the saved figure), so an empty `result` there is expected, not a failure."""
+    if not solution:
+        return {"ran": False, "error": "(no solution code)", "output": "", "redefines": [],
+                "result_none_by_design": False}
+    setup = _prompt_setup(problem)
     sol = "\n".join(ln for ln in solution.splitlines() if ln.strip() not in ("```", "```python", "python"))
     redef = _redefines_input(setup, sol) if setup else []
-    script = f"{setup}\n{sol}\ntry:\n    print(repr(result))\nexcept NameError:\n    print('(no `result` variable set)')\n"
+
+    tmpl = _exec_template(problem)
+    script = ""
+    if tmpl and "[insert]" in tmpl:
+        # Every name the template takes from the hidden test_input must be obtainable from the prompt's
+        # example setup instead — either defined there directly, or as example_<name>. If any name cannot be
+        # bound label-free, fall back rather than guess.
+        ok = True
+        for names in re.findall(r"^(.+?)\s*=\s*test_input\s*$", tmpl, re.M):
+            for nm in [n.strip() for n in names.split(",")]:
+                # A setup line like `df = load_data()` is a PLACEHOLDER: DS-1000 uses it to say "the data
+                # arrives here" without shipping load_data, so treating it as a real definition leaves the
+                # name unbound and the run dies with NameError. Only concrete assignments count.
+                m_def = re.search(rf"^\s*{re.escape(nm)}\s*=\s*(.+)$", setup, re.M)
+                concrete = bool(m_def) and "load_data(" not in m_def.group(1)
+                if not (concrete or re.search(rf"^\s*example_{re.escape(nm)}\s*=", setup, re.M)):
+                    ok = False
+        if ok:
+            # Substitute the hidden-input line IN PLACE (never delete it, never hoist the binding to the
+            # top): its position matters. In a function-body problem the template reads
+            #   def f(df):\n[insert]\ndf = test_input\nresult = f(df)
+            # so `df = test_input` sits AFTER the function at module level — moving that assignment above
+            # the def, or dropping the line and prepending the binding, breaks the indentation.
+            def _bind_line(mo):
+                names = [n.strip() for n in mo.group(1).split(",")]
+                pairs = [f"{n} = example_{n}" for n in names
+                         if not re.search(rf"^\s*{re.escape(n)}\s*=", setup, re.M)]
+                return "\n".join(pairs)                      # '' when the setup already defines them
+            body = re.sub(r"^(.+?)\s*=\s*test_input\s*$", _bind_line, tmpl, flags=re.M)
+            body = body.replace("[insert]", sol)
+            script = (f"{setup}\n{body}\n"
+                      "try:\n    print(repr(result))\n"
+                      "except NameError:\n    print('(no `result` variable set)')\n")
+    if not script:                                              # no usable template -> previous behaviour
+        script = f"{setup}\n{sol}\ntry:\n    print(repr(result))\nexcept NameError:\n    print('(no `result` variable set)')\n"
+
+    # Plotting problems end their OWN template with `result = None` and are graded from the saved figure, so
+    # a None result there is the template speaking, not a failing solution. Flag it, or every correct
+    # Matplotlib answer reads as "produced nothing".
+    none_by_design = bool(re.search(r"^\s*result\s*=\s*None\s*$", tmpl, re.M)) if tmpl else False
+
     rc, out, err = _run_script(script, timeout)
     if rc == 0:
-        return {"ran": True, "error": "", "output": out[:1000], "redefines": redef}
-    return {"ran": False, "error": (("TIMEOUT" if rc == -9 else err) or "")[:600], "output": out[:1000], "redefines": redef}
+        return {"ran": True, "error": "", "output": out[:1000], "redefines": redef,
+                "result_none_by_design": none_by_design}
+    return {"ran": False, "error": (("TIMEOUT" if rc == -9 else err) or "")[:600], "output": out[:1000],
+            "redefines": redef, "result_none_by_design": none_by_design}
