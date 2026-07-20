@@ -224,17 +224,25 @@ def load_problems(ids=None, min_ref_lines=None, limit=None):
 
 
 # ---------- execution ----------
+_TMP_PATH_RE = re.compile(r'/tmp/tmp[A-Za-z0-9_]+\.py')
+
+
 def _run_script(script, timeout):
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(script)
         path = f.name
     try:
         r = subprocess.run([sys.executable, path], capture_output=True, text=True, timeout=timeout)
-        return r.returncode, r.stdout, r.stderr
+        # Scrub the RANDOM temp-file name out of the traceback. A harness feeds this text back to the
+        # solver as a retry prompt, so leaving it in made every retry prompt unique and therefore
+        # permanently uncacheable — measured: 23 of 114 coder calls in one batch (20%) could never hit
+        # the cache, precisely on the problems that need repair, i.e. where harnesses differ most.
+        # The path also tells the model nothing it can use.
+        return r.returncode, r.stdout, _TMP_PATH_RE.sub("<script>", r.stderr)
     except subprocess.TimeoutExpired:
         return -9, "", "TIMEOUT"
     except Exception as e:  # noqa: BLE001
-        return -1, "", str(e)[:200]
+        return -1, "", _TMP_PATH_RE.sub("<script>", str(e))[:200]
     finally:
         try:
             os.unlink(path)
@@ -381,6 +389,7 @@ def _example_closure(examples, names):
 # A setup line like `df = load_data()` is DS-1000 saying "the data arrives here"; the function is never
 # shipped. Such a name has NO concrete example value, so the solution cannot be exercised label-free.
 _PLACEHOLDER_CALL = re.compile(r"\b(load_data|load_iris|load_digits|fetch_\w+)\s*\(")
+
 
 
 def _exec_template(problem):
