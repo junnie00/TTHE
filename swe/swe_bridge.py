@@ -94,17 +94,26 @@ def exec_in_repo(env, command, timeout=None):
         return {"output": f"(exec error: {type(e).__name__}: {str(e)[:200]})", "returncode": -1}
 
 
+STEP_LIMIT = 80        # FIXED — see run_stock_agent.__doc__; harnesses may not change it
+
+
 def run_stock_agent(env, model, instance, system_template=None, instance_template=None,
-                    step_limit=250, wall_time=5400):
+                    wall_time=5400):
     """Run ONE stock mini-swe-agent rollout on a GIVEN env+model (caller owns their lifecycle). This is the
     default bash loop — a CONVENIENCE the harness may keep, replace with its own llm+exec loop, or wrap.
 
-    step_limit defaults to 250 because that is what mini-swe-agent's own swebench.yaml specifies. It was 80
-    here, i.e. a third of the official budget, which made the "stock mini-swe-agent" baseline weaker than
-    stock mini-swe-agent actually is: a smoke run hit LimitsExceeded at step 80 with an empty patch on an
-    instance the agent was still working on. Two problems with that. The baseline understates the floor, and
-    since step_limit is a lever the PROPOSER may set, an evolved harness could "improve" simply by restoring
-    the official budget — a gain we would have manufactured by handicapping the baseline first.
+    STEP_LIMIT IS FIXED AT 80 AND IS NOT A HARNESS PARAMETER. mini-swe-agent's swebench.yaml specifies
+    250, and 250 was measured here: of 17 instances, 12 finished within 80 steps (identical either way)
+    and 5 exceeded it. Those 5 cost roughly 10x more — an agent turn resends the whole conversation, so
+    spend grows with the SQUARE of the step count — and bought exactly ONE extra solve (2/17 at 250 vs
+    1/17 at 80). The worst offender spent 306 steps and still returned an empty patch: it was looping,
+    not converging.
+
+    It is fixed rather than merely defaulted because it is otherwise a lever the PROPOSER could pull. A
+    harness that simply raised the budget would post a gain that is bought with money, not with a better
+    method, and the comparison against the baseline would be meaningless. Budget is held constant so that
+    what evolves is the strategy. (A harness may still spend its budget better — noticing a looping
+    rollout and stopping early is a real and reachable improvement.)
 
     wall_time has no official counterpart; it exists only so a wedged rollout cannot stall the loop. It was
     1500s, which at the restored 250-step budget would simply have become the new binding limit (a smoke
@@ -115,7 +124,7 @@ def run_stock_agent(env, model, instance, system_template=None, instance_templat
             model, env,
             system_template=system_template or DEFAULT_SYS,
             instance_template=instance_template or DEFAULT_INST,
-            step_limit=step_limit, cost_limit=0.0, wall_time_limit_seconds=wall_time,
+            step_limit=STEP_LIMIT, cost_limit=0.0, wall_time_limit_seconds=wall_time,
         )
         result = agent.run(instance["problem_statement"])
         return (result.get("submission", "") or ""), {"exit_status": result.get("exit_status"), "error": "",
@@ -131,13 +140,13 @@ def run_stock_agent(env, model, instance, system_template=None, instance_templat
                     "n_calls": 0, "messages": []}
 
 
-def agent_rollout(instance, system_template=None, instance_template=None, step_limit=250, wall_time=5400):
+def agent_rollout(instance, system_template=None, instance_template=None, wall_time=5400):
     """Backward-compatible one-shot: make env+model, run the stock agent, tear the container down."""
     env = None
     try:
         env = make_env(instance)
         return run_stock_agent(env, make_model(), instance, system_template, instance_template,
-                               step_limit, wall_time)
+                               wall_time)
     except Exception as e:  # noqa: BLE001
         return "", {"exit_status": type(e).__name__, "n_calls": 0, "messages": []}
     finally:

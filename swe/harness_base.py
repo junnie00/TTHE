@@ -37,7 +37,7 @@ class SWEHarness(ABC):
                             — run one bash command in the REAL repo container (label-free). Build your OWN
                               read->exec->observe loop, or verify a patch (git apply; python -m pytest <the
                               repo's own tests>) after a rollout.
-        self.run_agent(system_template=None, instance_template=None, step_limit=250, wall_time=5400) -> patch
+        self.run_agent(system_template=None, instance_template=None, wall_time=5400) -> patch  (step budget FIXED)
                             — CONVENIENCE: one stock mini-swe-agent bash loop (the old default). You may keep
                               it, replace it with your own llm+exec loop, or wrap it with verify->repair.
         self._trace         — FULL trace of every llm / exec / rollout step.
@@ -77,12 +77,12 @@ class SWEHarness(ABC):
                             "returncode": r["returncode"], "output": str(r["output"])[:800]})
         return r
 
-    def run_agent(self, system_template=None, instance_template=None, step_limit=250, wall_time=5400) -> str:
+    def run_agent(self, system_template=None, instance_template=None, wall_time=5400) -> str:
         """CONVENIENCE: one stock mini-swe-agent rollout on the harness's shared env+model. Records the full
         trajectory into the trace. You may keep it, wrap it, or replace it with your own self.llm/self.exec
         loop — the loop is yours to evolve; only the model is frozen."""
         patch, info = bridge.run_stock_agent(self._get_env(), self._get_model(), self.instance,
-                                             system_template, instance_template, step_limit, wall_time)
+                                             system_template, instance_template, wall_time)
         self._trace.append({"step": "agent_rollout", "system": system_template, "instance_tmpl": instance_template,
                             "exit_status": info["exit_status"], "error": info.get("error", ""),
                             "n_calls": info["n_calls"], "messages": info["messages"], "patch": patch})

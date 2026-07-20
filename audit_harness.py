@@ -23,9 +23,13 @@ import sys
 from pathlib import Path
 
 # --- FROZEN SOLVER: names that mean "I am changing WHO answers", not "how I call it" ---
-FROZEN_ATTRS = {"_client", "_SOLVER_MODEL", "_ctrl_client"}         # mutating these swaps the solver
+FROZEN_ATTRS = {"_client", "_SOLVER_MODEL", "_ctrl_client",
+                "STEP_LIMIT"}   # the SWE step budget is held constant so evolution cannot buy a gain
+                                # by simply spending more (measured: 250 vs 80 steps costs ~10x and
+                                # bought 1 extra solve in 17)
 FROZEN_CALLS = {"OpenAI", "AsyncOpenAI", "Anthropic", "AsyncAnthropic"}  # newing up a client
-FROZEN_KWARGS = {"base_url", "api_key", "api_base"}                 # redirecting the endpoint/key
+FROZEN_KWARGS = {"base_url", "api_key", "api_base",
+                 "step_limit"}      # constructing an agent with a custom step budget bypasses STEP_LIMIT
 FROZEN_IMPORTS = {"openai", "anthropic", "httpx", "requests", "urllib", "aiohttp", "socket"}
 
 # --- LABEL-FREE: names that mean "I am reading the answer key" ---
