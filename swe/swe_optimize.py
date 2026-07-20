@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import swe_bridge as bridge
 from . import swe_proposer as P
 from .swe_common import load_harness, PKG_DIR, AGENTS_DIR
+from .swe_bare import _render_msg
 from audit_harness import audit_file
 
 _SOLVE_POOL = ThreadPoolExecutor(max_workers=32)
@@ -127,7 +128,7 @@ def main():
             if m is None:
                 L.append(f"\n  ... [{len(msgs) - HEAD - TAIL} middle steps elided] ...")
                 continue
-            content = str(m.get("content", ""))
+            content = _render_msg(m)
             body = content if len(content) <= 1600 else content[:900] + "\n  ...[cut]...\n" + content[-600:]
             L.append(f"\n### agent step {idx}\n{body}" if m.get("role") == "assistant"
                      else f"\nOBSERVATION (step {idx}):\n{body}")
