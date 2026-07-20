@@ -110,20 +110,27 @@ def main():
         for st in steps:
             if st.get("step") == "agent_rollout":
                 msgs += st.get("messages", [])
-        shown = 0
-        for m in msgs:
-            if shown >= 15:
-                L.append("\n  ... (trajectory truncated)")
-                break
-            role = m.get("role")
-            if role == "system":
+        # HEAD + TAIL, never a bare prefix. The agent runs up to 80 steps; showing only the FIRST 15 meant the
+        # trace always stopped in the exploration phase and NEVER reached the end — where the agent reproduces
+        # the issue, verifies the fix and builds the patch. That is precisely the evidence the note at the
+        # bottom of this file tells the reader to look for, and precisely what was being cut away, leaving the
+        # proposer and judge to evaluate a trajectory by its opening moves.
+        msgs = [m for m in msgs if m.get("role") != "system"]
+        HEAD, TAIL = 8, 12
+        if len(msgs) <= HEAD + TAIL:
+            picked = list(enumerate(msgs, 1))
+        else:
+            picked = ([(i + 1, m) for i, m in enumerate(msgs[:HEAD])]
+                      + [(None, None)]
+                      + [(len(msgs) - TAIL + i + 1, m) for i, m in enumerate(msgs[-TAIL:])])
+        for idx, m in picked:
+            if m is None:
+                L.append(f"\n  ... [{len(msgs) - HEAD - TAIL} middle steps elided] ...")
                 continue
             content = str(m.get("content", ""))
-            if role == "assistant":
-                L.append(f"\n### agent step {shown+1}\n{content[:800]}")
-            else:
-                L.append(f"\nOBSERVATION:\n{content[:800]}")
-            shown += 1
+            body = content if len(content) <= 1600 else content[:900] + "\n  ...[cut]...\n" + content[-600:]
+            L.append(f"\n### agent step {idx}\n{body}" if m.get("role") == "assistant"
+                     else f"\nOBSERVATION (step {idx}):\n{body}")
         L.append(f"\n## FINAL PATCH\n```diff\n{str(patch)}\n```")   # never truncate the final artifact the judge evaluates
         L.append("\nNOTE: a NON-EMPTY, targeted patch whose trajectory shows the agent REPRODUCED the issue and "
                  "VERIFIED the fix (and only touches source, not tests) is the label-free signal — the gold hidden "
