@@ -95,9 +95,21 @@ def exec_in_repo(env, command, timeout=None):
 
 
 def run_stock_agent(env, model, instance, system_template=None, instance_template=None,
-                    step_limit=80, wall_time=1500):
+                    step_limit=250, wall_time=5400):
     """Run ONE stock mini-swe-agent rollout on a GIVEN env+model (caller owns their lifecycle). This is the
-    default bash loop — a CONVENIENCE the harness may keep, replace with its own llm+exec loop, or wrap."""
+    default bash loop — a CONVENIENCE the harness may keep, replace with its own llm+exec loop, or wrap.
+
+    step_limit defaults to 250 because that is what mini-swe-agent's own swebench.yaml specifies. It was 80
+    here, i.e. a third of the official budget, which made the "stock mini-swe-agent" baseline weaker than
+    stock mini-swe-agent actually is: a smoke run hit LimitsExceeded at step 80 with an empty patch on an
+    instance the agent was still working on. Two problems with that. The baseline understates the floor, and
+    since step_limit is a lever the PROPOSER may set, an evolved harness could "improve" simply by restoring
+    the official budget — a gain we would have manufactured by handicapping the baseline first.
+
+    wall_time has no official counterpart; it exists only so a wedged rollout cannot stall the loop. It was
+    1500s, which at the restored 250-step budget would simply have become the new binding limit (a smoke
+    run spent ~10 minutes reaching step 80), moving the handicap rather than removing it. 5400s is loose
+    enough to bind only on a genuinely stuck agent."""
     try:
         agent = DefaultAgent(
             model, env,
@@ -106,13 +118,20 @@ def run_stock_agent(env, model, instance, system_template=None, instance_templat
             step_limit=step_limit, cost_limit=0.0, wall_time_limit_seconds=wall_time,
         )
         result = agent.run(instance["problem_statement"])
-        return (result.get("submission", "") or ""), {"exit_status": result.get("exit_status"),
+        return (result.get("submission", "") or ""), {"exit_status": result.get("exit_status"), "error": "",
                                                        "n_calls": agent.n_calls, "messages": agent.messages}
     except Exception as e:  # noqa: BLE001
-        return "", {"exit_status": type(e).__name__, "n_calls": 0, "messages": []}
+        # Keep the MESSAGE, not just the class. Everything that goes wrong outside the agent's control —
+        # an exhausted API budget, an unreachable endpoint, a dead container — arrives here, and with only
+        # the class name an infrastructure failure is indistinguishable from "the model could not do it":
+        # both surface as an empty patch. Measured: a run where the endpoint's rolling budget ran out
+        # produced 8 instances with an empty patch and zero steps, which without this text reads as eight
+        # model failures. `RateLimitError: ... ExceededBudget: Key over 3h budget` says what it really was.
+        return "", {"exit_status": type(e).__name__, "error": str(e)[:1500],
+                    "n_calls": 0, "messages": []}
 
 
-def agent_rollout(instance, system_template=None, instance_template=None, step_limit=80, wall_time=1500):
+def agent_rollout(instance, system_template=None, instance_template=None, step_limit=250, wall_time=5400):
     """Backward-compatible one-shot: make env+model, run the stock agent, tear the container down."""
     env = None
     try:

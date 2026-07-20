@@ -104,7 +104,11 @@ def main():
 
     def write_trace(trace_dir, name, j, instance, patch, steps):
         iid = instance["instance_id"]
+        roll = next((st for st in steps if st.get("step") == "agent_rollout"), {})
         L = [f"# Trace — harness `{name}` — I{j}  [{iid} / {instance['repo']}]\n",
+             f"## ROLLOUT OUTCOME (infrastructure failure vs model failure — an empty patch can be either)\n"
+             f"  exit_status = {roll.get('exit_status')!r}\n  n_calls = {roll.get('n_calls')}\n"
+             f"  error = {str(roll.get('error', ''))[:800]!r}\n",
              f"## ISSUE\n{instance['problem_statement'][:4000]}\n",
              "## WHAT THE AGENT DID — its trajectory (reproduction scripts + test runs = the label-free evidence):"]
         msgs = []

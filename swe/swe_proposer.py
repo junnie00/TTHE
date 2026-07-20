@@ -84,7 +84,7 @@ def propose_batch(tk):
         f"SMALLEST edit available to you, not the expected one.\n"
         f"Harness API — these primitives EXIST; WHETHER, WHEN and HOW to use them is entirely up to you: "
         f"self.instance (dict); self.problem (issue text); self.repo; self._trace; "
-        f"self.run_agent(system_template=None, instance_template=None, step_limit=80, wall_time=1500) -> patch "
+        f"self.run_agent(system_template=None, instance_template=None, step_limit=250, wall_time=5400) -> patch "
         f"(the stock rollout); and the two primitives it is itself built from —\n"
         f"  * self.llm(messages) -> str : ONE call to the frozen coder, with messages you compose. This is "
         f"what lets you build your own agent loop instead of inheriting mini-swe-agent's.\n"

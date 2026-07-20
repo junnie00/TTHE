@@ -49,7 +49,12 @@ def main():
 
     def write_trace(inst, patch, steps):
         iid = inst["instance_id"]
+        roll = next((st for st in steps if st.get("step") == "agent_rollout"), {})
+        # Surface the rollout's OUTCOME at the top. An empty patch caused by an exhausted API budget and
+        # an empty patch caused by the model failing look identical without it.
         L = [f"# Baseline trace — harness `bare` — {iid}  [{inst['repo']}]\n",
+             f"## ROLLOUT OUTCOME\n  exit_status = {roll.get('exit_status')!r}\n"
+             f"  n_calls = {roll.get('n_calls')}\n  error = {str(roll.get('error', ''))[:800]!r}\n",
              f"## ISSUE\n{inst['problem_statement']}\n",
              "## WHAT THE AGENT DID — full trajectory:"]
         msgs = [m for st in steps if st.get("step") == "agent_rollout" for m in st.get("messages", [])
