@@ -14,6 +14,10 @@ from pathlib import Path
 
 from datasets import load_dataset
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).parent.parent))
+from ase.solver_cache import SolverCache
+
 from minisweagent.agents.default import DefaultAgent
 from minisweagent.models.litellm_model import LitellmModel
 from minisweagent.config import builtin_config_dir, get_config_from_spec
@@ -64,6 +68,41 @@ def teardown_env(env):
             pass
 
 
+_CACHE = SolverCache(os.environ.get("SWE_SOLVER_CACHE", str(LOGS / "solver_cache.json")))
+
+
+class _CachedModel:
+    """LitellmModel wrapper that caches every model reply, keyed on the FULL message list.
+
+    Why it works here, and why it is worth more here than anywhere else: an agent turn is determined
+    entirely by the conversation so far, so two harnesses that send the same messages get the same reply
+    and therefore run the same command and see the same output — the ENTIRE rollout replays from cache.
+    A TTHE batch runs many candidates that share a base and often identical templates; without this each
+    one pays full price for a trajectory it shares with its siblings, and SWE is by far the most expensive
+    domain (median 63 model calls per instance, up to ~150).
+
+    It also removes the same measurement noise the other domains got from ase.solver_cache: two harnesses
+    that behave identically now SCORE identically, so a score difference means a real behavioural
+    difference. (Measured on DS-1000 before caching: byte-identical prompts scored 6/10, 3/10 and 4/10.)
+
+    Divergence degrades gracefully — the moment a command output differs, every later prompt differs and
+    those calls simply miss."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self._seq = {}
+
+    def __getattr__(self, name):          # cost, n_calls, config, ... stay on the wrapped model
+        return getattr(self._inner, name)
+
+    def query(self, messages, **kw):
+        key = json.dumps(messages, ensure_ascii=False, sort_keys=True, default=str)
+        # seq keeps a harness that deliberately re-asks the SAME question from collapsing into one answer.
+        n = self._seq.get(key, 0)
+        self._seq[key] = n + 1
+        return _CACHE.get_or_call((MODEL, key, n), lambda: self._inner.query(messages, **kw))
+
+
 def make_model():
     """The FROZEN weak solver (deepseek-v4-flash / mimo-v* via litellm). Do NOT vary model/endpoint."""
     model_kwargs = {"api_base": BASE_URL,
@@ -71,7 +110,8 @@ def make_model():
                     "drop_params": True}
     if THINKING_STYLE == "deepseek":                     # deepseek-v* / mimo-v* native thinking toggle
         model_kwargs["extra_body"] = {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
-    return LitellmModel(model_name=MODEL, model_kwargs=model_kwargs, cost_tracking="ignore_errors")
+    return _CachedModel(LitellmModel(model_name=MODEL, model_kwargs=model_kwargs,
+                                     cost_tracking="ignore_errors"))
 
 
 def model_query(model, messages):
