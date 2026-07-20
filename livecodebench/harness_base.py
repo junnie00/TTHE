@@ -49,13 +49,20 @@ class CodeHarness(ABC):
         self.starter_code = problem.starter_code
         self.public_tests = problem.public_tests
         self._trace = []          # FULL trace: every coder call (+ thinking choice) + every public-test run
+        self._call_seq = {}       # request signature -> times THIS instance already issued it
 
     def llm(self, prompt, system="", thinking=False, n=1, max_tokens=None):
         """Call the frozen coder. thinking=False -> no thinking (fast, but weaker on hard problems);
         'low'/'medium'/'high' -> think at that effort (often better on hard, slower / can time out on a slow
         endpoint). No preset best — decide from the traces. max_tokens=None -> the default output cap; raise it
         if replies get cut off before the code fence. Both choices are recorded in the trace for the proposer."""
-        out = bridge.solver_llm(prompt, system=system, n=n, thinking=thinking, max_tokens=max_tokens)
+        # seq = how many times THIS instance already issued this exact request, so deliberate resampling
+        # (voting, retries with the same prompt) still gets fresh draws while identical one-shot asks
+        # across harnesses collapse to one cached answer.
+        sig = (prompt, system, str(thinking), max_tokens, n)
+        seq = self._call_seq.get(sig, 0)
+        self._call_seq[sig] = seq + 1
+        out = bridge.solver_llm(prompt, system=system, n=n, thinking=thinking, max_tokens=max_tokens, seq=seq)
         self._trace.append({"step": "coder_llm", "thinking": thinking, "max_tokens": max_tokens,
                             "system": system, "prompt": prompt,
                             "response": out if isinstance(out, str) else list(out)})

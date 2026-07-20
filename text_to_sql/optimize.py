@@ -237,7 +237,14 @@ def main():
              "## WHAT THE HARNESS DID — full step-by-step (every coder call + every SQL it ran, in order):"]
         for i, st in enumerate(steps, 1):
             if st.get("step") == "coder_llm":
-                L.append(f"\n### step {i} — called the coder (deepseek)\nPROMPT:\n{str(st.get('prompt'))[:1500]}\n"
+                # Show the HEAD and the TAIL. A flat [:1500] cut kept only the question and schema — which the
+                # proposer already knows — and always discarded the tail, where the harness's OWN appended
+                # probe results, hints and error feedback live. A proposer writing those could therefore never
+                # observe their effect in any trace, and was editing them blind.
+                pr = str(st.get('prompt'))
+                shown = pr if len(pr) <= 2600 else (pr[:900] + f"\n\n... [{len(pr) - 2600} chars of schema "
+                                                    f"elided] ...\n\n" + pr[-1700:])
+                L.append(f"\n### step {i} — called the coder (deepseek)\nPROMPT:\n{shown}\n"
                          f"CODER RESPONSE:\n{str(st.get('response'))[:1500]}")
             else:
                 L.append(f"\n### step {i} — executed SQL\nSQL: {str(st.get('sql'))[:4000]}\n"
@@ -427,12 +434,18 @@ def main():
                 flush=True,
             )
 
-        # PICK phase: the judge sees only the final active branches, never the historical archive.
-        final_candidates = list(dict.fromkeys(branches))
-        for c in final_candidates:
+        # PICK phase — ROLLBACK GATE (ported from LCB/DS-1000, where it was measured). The judge chooses from
+        # EVERY harness observed this batch — the incoming H plus every round's branches — not just the final
+        # round. Two reasons, both observed elsewhere: rounds routinely DEGRADE a good early branch, and
+        # offering only the last round silently discards it; and keeping H in the pool IS the gate, since if
+        # nothing this batch produced beats H the judge keeps H and the accumulated harness cannot regress.
+        # Without it, `else final_candidates[0]` also meant a judge failure adopted an ARBITRARY branch rather
+        # than holding position. cand_results is insertion-ordered (H first, then r0/r1/r2), so use it directly.
+        for c in dict.fromkeys(branches):
             if c not in traced and _loadable(c, db0):
                 cand_results[c] = observe(c, batch, trace_dir)
                 traced.add(c)
+        final_candidates = list(cand_results.keys())
         picked = P.pick_batch(
             final_candidates,
             trace_dir,
@@ -440,8 +453,9 @@ def main():
             f"b{bi}",
             args.model,
             args.propose_timeout,
+            incumbent=H,
         )
-        H = picked if picked in final_candidates else final_candidates[0]
+        H = picked if picked in final_candidates else H     # judge failure -> keep the incumbent
         print(
             f"   batch{bi}: final branches={branches} "
             f"({len(final_candidates)} unique) -> JUDGE picked H={H}",
@@ -481,11 +495,25 @@ def main():
 
 
 def _loadable(name, db):
+    """Admissible only if it IMPORTS and passes the TTHE invariant audit.
+
+    The audit existed but was never wired in: every domain's harness_base docstring claims
+    "audit_harness.py checks them" while nothing called it, leaving FROZEN-SOLVER and LABEL-FREE on
+    the honour system. A violating candidate is rejected here, leaving its branch at its parent.
+    (First run with this enabled on DS-1000 caught a real violation in the first batch.)"""
     try:
         load_harness(name, db)
-        return True
     except Exception:
         return False
+    try:
+        bad = [v for v in audit_file(AGENTS_DIR / f"{name}.py") if v["rule"] != "PARSE"]
+    except Exception:  # noqa: BLE001
+        return True                       # auditor failure must not reject a valid candidate
+    if bad:
+        print(f"   [audit] REJECTED {name}: " +
+              "; ".join(f"{v['rule']} line {v['line']}: {v['detail']}" for v in bad[:4]), flush=True)
+        return False
+    return True
 
 
 if __name__ == "__main__":

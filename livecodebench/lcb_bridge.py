@@ -26,6 +26,7 @@ if REPO_ROOT not in sys.path:
 import time                                                                   # noqa: E402
 import yaml                                                                   # noqa: E402
 from openai import OpenAI                                                      # noqa: E402
+from ase.solver_cache import SolverCache  # noqa: E402
 from ase.llm import extract_code                                              # noqa: E402
 from huggingface_hub import hf_hub_download                                  # noqa: E402
 
@@ -48,11 +49,17 @@ _THINKING_STYLE = _cfg.get("thinking_style", "deepseek")
 _TEMP = float(_cfg.get("temperature", 0.0))
 
 
-def solver_llm(prompt, system="", n=1, thinking=False, max_tokens=None):
+_CACHE = SolverCache(os.environ.get("LCB_SOLVER_CACHE",
+                                     os.path.join(os.path.dirname(__file__), "logs", "solver_cache.json")))
+
+
+def solver_llm(prompt, system="", n=1, thinking=False, max_tokens=None, seq=0):
     """FROZEN weak solver. THINKING IS HARNESS-CONTROLLED: thinking=False -> disabled (sane default — the
     weak model over-thinks on hard and emits NO code); 'low'|'medium'|'high' -> enabled at that effort.
     max_tokens is HARNESS-CONTROLLED too (None -> LCB_MAX_TOKENS default); the output cap bounds a
-    think-forever call. n=1 -> str, n>1 -> list[str]."""
+    think-forever call. n=1 -> str, n>1 -> list[str].
+
+    Replies are CACHED on (prompt, system, thinking, max_tokens, seq) — see ase.solver_cache."""
     msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
     mt = _MAX_TOKENS if max_tokens is None else int(max_tokens)
     kw = dict(model=_SOLVER_MODEL, messages=msgs, max_tokens=mt)
@@ -77,7 +84,9 @@ def solver_llm(prompt, system="", n=1, thinking=False, max_tokens=None):
                 if attempt == 1:
                     return ""
                 time.sleep(2.0)
-    outs = [one() for _ in range(max(n, 1))]
+    # Each of the n samples is its own slot: n>1 is a harness ASKING for diversity, so slot i must stay
+    # distinct, while a second harness issuing the same request reuses the same i answers.
+    outs = [_CACHE.get_or_call((prompt, system, thinking, mt, seq, i), one) for i in range(max(n, 1))]
     return outs[0] if n == 1 else outs
 
 

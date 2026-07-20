@@ -19,6 +19,7 @@ if REPO_ROOT not in sys.path:                                                 # 
     sys.path.insert(0, REPO_ROOT)
 CONFIG_PATH = os.environ.get("TTHE_CONFIG", os.path.join(REPO_ROOT, "config.yaml"))
 
+from ase.solver_cache import SolverCache
 from ase.llm import LLM, LLMConfig, extract_sql          # noqa: E402
 from ase.dataset import build_dataset                    # noqa: E402
 from ase.db import compare_results                       # noqa: E402
@@ -63,8 +64,16 @@ def set_temp_override(t):
     _tls.temp_override = t
 
 
-def solver_llm(prompt, system="", temperature=0.0, n=1):
-    """Call the FROZEN weak solver (deepseek-v4-flash). n=1 -> str, n>1 -> list[str]."""
+_CACHE = SolverCache(os.environ.get("SQL_SOLVER_CACHE",
+                                    os.path.join(os.path.dirname(__file__), "logs", "solver_cache.json")))
+
+
+def solver_llm(prompt, system="", temperature=0.0, n=1, seq=0):
+    """Call the FROZEN weak solver (deepseek-v4-flash). n=1 -> str, n>1 -> list[str].
+
+    Replies are CACHED on (prompt, system, temperature, n, seq) — see ase.solver_cache. NOTE: caching is
+    keyed on the EFFECTIVE temperature, so a self-consistency harness running at T>0 via set_temp_override
+    still draws distinct samples through `seq`, exactly as intended."""
     ov = getattr(_tls, "temp_override", None)
     t = ov if ov is not None else temperature
     # Some model APIs constrain temperature to a single value (for example,
@@ -72,7 +81,9 @@ def solver_llm(prompt, system="", temperature=0.0, n=1):
     # unless an isolated model-ablation process explicitly opts in.
     if os.environ.get("SOLVER_TEMPERATURE_OVERRIDE"):
         t = float(os.environ["SOLVER_TEMPERATURE_OVERRIDE"])
-    outs = _LLM.chat("harness", system, prompt, model_role="solver", n=n, temperature=t)
+    outs = _CACHE.get_or_call((prompt, system, t, n, seq),
+                              lambda: _LLM.chat("harness", system, prompt, model_role="solver", n=n,
+                                                temperature=t))
     return outs[0] if n == 1 else outs
 
 

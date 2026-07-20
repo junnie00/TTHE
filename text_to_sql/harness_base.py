@@ -42,11 +42,17 @@ class SQLHarness(ABC):
         self.db = db
         self.schema = db.schema_text()
         self._trace = []          # FULL execution trace of this solve: every coder call + every SQL run, in order
+        self._call_seq = {}       # request signature -> times THIS instance already issued it
 
     # convenience wrappers (so harness code reads cleanly) — they also RECORD into self._trace so the
     # proposer can deep-read the harness's complete step-by-step behaviour (not a compressed summary).
     def llm(self, prompt, system="", temperature=0.0, n=1):
-        out = bridge.solver_llm(prompt, system=system, temperature=temperature, n=n)
+        # seq = times THIS instance already issued this exact request, so deliberate resampling still
+        # draws fresh answers while identical asks across harnesses collapse to one cached reply.
+        sig = (prompt, system, temperature, n)
+        seq = self._call_seq.get(sig, 0)
+        self._call_seq[sig] = seq + 1
+        out = bridge.solver_llm(prompt, system=system, temperature=temperature, n=n, seq=seq)
         self._trace.append({"step": "coder_llm", "system": system, "prompt": prompt,
                             "response": out if isinstance(out, str) else list(out)})
         return out

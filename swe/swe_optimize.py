@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import swe_bridge as bridge
 from . import swe_proposer as P
 from .swe_common import load_harness, PKG_DIR, AGENTS_DIR
+from audit_harness import audit_file
 
 _SOLVE_POOL = ThreadPoolExecutor(max_workers=32)
 
@@ -41,11 +42,25 @@ def safe_solve(h, timeout):
 
 
 def _loadable(name, instance):
+    """Admissible only if it IMPORTS and passes the TTHE invariant audit.
+
+    The audit existed but was never wired in: every domain's harness_base docstring claims
+    "audit_harness.py checks them" while nothing called it, leaving FROZEN-SOLVER and LABEL-FREE on
+    the honour system. A violating candidate is rejected here, leaving its branch at its parent.
+    (First run with this enabled on DS-1000 caught a real violation in the first batch.)"""
     try:
         load_harness(name, instance)
-        return True
     except Exception:
         return False
+    try:
+        bad = [v for v in audit_file(AGENTS_DIR / f"{name}.py") if v["rule"] != "PARSE"]
+    except Exception:  # noqa: BLE001
+        return True                       # auditor failure must not reject a valid candidate
+    if bad:
+        print(f"   [audit] REJECTED {name}: " +
+              "; ".join(f"{v['rule']} line {v['line']}: {v['detail']}" for v in bad[:4]), flush=True)
+        return False
+    return True
 
 
 def main():
@@ -166,13 +181,19 @@ def main():
                     cand_results[c] = observe(c, batch, trace_dir)
                     traced.add(c)
             print(f"   batch{bi} gen-round{rnd}: {advanced}/{args.group} branches advanced", flush=True)
-        # PICK phase: the judge sees only the final active branches, never the historical archive.
-        final = list(dict.fromkeys(branches))
-        for c in final:
+        # PICK phase — ROLLBACK GATE (ported from LCB/DS-1000, where it was measured). The judge chooses from
+        # EVERY harness observed this batch — the incoming H plus every round's branches — not just the final
+        # round: rounds routinely DEGRADE a good early branch, and offering only the last round silently
+        # discards it. Keeping H in the pool IS the gate — if nothing this batch produced beats H, the judge
+        # keeps H and the accumulated harness cannot regress. cand_results is insertion-ordered (H first).
+        for c in dict.fromkeys(branches):
             if c not in traced and _loadable(c, batch[0]):
                 cand_results[c] = observe(c, batch, trace_dir)
                 traced.add(c)
-        H = P.pick_batch(final, trace_dir, run_dir, f"b{bi}", args.model, args.propose_timeout) or H
+        final = list(cand_results.keys())
+        picked = P.pick_batch(final, trace_dir, run_dir, f"b{bi}", args.model, args.propose_timeout,
+                              incumbent=H)
+        H = picked if picked in final else H          # judge failure -> keep the incumbent, not a random branch
         print(f"   batch{bi}: final branches={branches} ({len(final)} unique) -> JUDGE picked H={H}", flush=True)
         patches = cand_results.get(H)
         if patches is not None:

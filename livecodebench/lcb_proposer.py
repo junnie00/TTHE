@@ -181,6 +181,7 @@ def run_picker(tk):
     on the most problems. It is given tools, not a fixed metric — mirrors the SQL judge's 'probe, don't
     eyeball' stance (LCB has no gold Hint, so investigation is the only anchor)."""
     cands, trace_dir, choice_path = tk["candidates"], tk["trace_dir"], tk["choice_path"]
+    incumbent = tk.get("incumbent") or cands[0]
     cand_list = "\n".join(f"  - `{c}`  (traces: {trace_dir}/{c}__q*.md ; code: {AGENTS_DIR}/{c}.py)" for c in cands)
     prompt = (
         f"You are the JUDGE. There are {len(cands)} candidate competitive-programming harnesses; each ran on a "
@@ -215,13 +216,21 @@ def run_picker(tk):
         f"INPUT, not the program. Base each verdict on a check you actually ran, and prefer the harness with the "
         f"most problems that survive your scrutiny. Never touch the hidden tests or any answer key. True ties -> "
         f"the simpler / more general harness.\n\n"
+        f"THE INCUMBENT. `{incumbent}` is the harness currently in force — every other candidate is a "
+        f"CHALLENGER descended from it. The burden of proof is on the challenger: keep `{incumbent}` unless "
+        f"you can point to specific problems where a challenger is verifiably right and it is wrong. A tie "
+        f"goes to the incumbent. Evolution that cannot demonstrate an improvement should not be adopted.\n"
+        f"NEVER break a tie on ARCHITECTURE — 'more robust regex', 'better system prompt', 'looks more "
+        f"general' describe SOURCE CODE, not OUTPUTS, and are how a judge talks itself into the wrong "
+        f"answer. If candidates are tied on measured results, find another problem to discriminate on.\n"
+
         f"Write ONLY the chosen harness's exact NAME to `{choice_path}` (run:  echo <name> > {choice_path} ). Then STOP.")
     claude_wrapper.run(prompt=prompt, model=tk["model"], allowed_tools=PROPOSER_TOOLS, cwd=str(MH_ROOT),
                        log_dir=str(Path(tk["run_dir"]) / "claude_sessions"), name=f"judge_{tk['tag']}",
                        timeout_seconds=tk["timeout"], progress=False)
 
 
-def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout):
+def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout, incumbent=None):
     if len(candidates) <= 1:
         return candidates[0] if candidates else None
     choice_path = Path(run_dir) / f"judge_{tag}.txt"
@@ -229,7 +238,8 @@ def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout):
     tpath = Path(run_dir) / f"judgetask_{tag}.json"
     tpath.write_text(json.dumps({"candidates": candidates, "trace_dir": str(trace_dir),
                                  "choice_path": str(choice_path), "run_dir": str(run_dir), "tag": tag,
-                                 "model": model, "timeout": timeout}))
+                                 "model": model, "timeout": timeout,
+                                 "incumbent": incumbent or candidates[0]}))
     p = subprocess.Popen([sys.executable, "-u", "-m", f"{PKG}.lcb_proposer", "--picker", str(tpath)],
                          cwd=str(MH_ROOT), start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

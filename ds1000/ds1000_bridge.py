@@ -28,6 +28,7 @@ import time                                                                   # 
 import yaml                                                                   # noqa: E402
 from openai import OpenAI                                                      # noqa: E402
 from ase.llm import extract_code as _raw_extract_code                         # noqa: E402
+from ase.solver_cache import SolverCache                                       # noqa: E402
 
 
 def extract_code(text):
@@ -78,44 +79,8 @@ def _get_client():
     return _client
 
 
-_CACHE_PATH = os.environ.get("DS1000_SOLVER_CACHE", os.path.join(os.path.dirname(__file__), "logs",
-                                                                 "solver_cache.json"))
-_CACHE_LOCK = threading.Lock()
-_CACHE = None
-
-
-def _cache():
-    """Disk-backed cache of FROZEN-solver replies, shared by every harness in a run.
-
-    Why this exists (measured on ds_b0_fixed batch0): of 134 coder calls, only 27 prompts were DISTINCT —
-    one identical prompt was issued 20 times. Candidates that never touched the prompt-building code were
-    therefore asked the SAME question and handed DIFFERENT answers, because thinking mode is nondeterministic
-    even at temperature 0. react, b0r0_g0 and b0r0_g2 have byte-identical SYS and byte-identical prompts on
-    all four discriminating problems, yet scored 6/10, 3/10 and 4/10. That +-3 spread is pure sampling, and it
-    is larger than any effect the loop is trying to detect.
-
-    With the cache, harnesses that ask the same thing get the same answer, so a score difference can only come
-    from a real mechanism difference — and the run costs ~20% of what it did."""
-    global _CACHE
-    if _CACHE is None:
-        with _CACHE_LOCK:
-            if _CACHE is None:
-                try:
-                    _CACHE = json.load(open(_CACHE_PATH, encoding="utf-8"))
-                except Exception:  # noqa: BLE001
-                    _CACHE = {}
-    return _CACHE
-
-
-def _cache_key(prompt, system, thinking, mt, seq):
-    """`seq` = how many times THIS harness instance has already issued this exact request.
-
-    It is what keeps the cache from destroying deliberate resampling: a harness that asks the same question
-    three times to vote over the answers gets seq=0,1,2 -> three DIFFERENT cached replies, and any other
-    harness doing the same thing gets the same three. Dropping seq would collapse all three into one answer
-    and silently delete the mechanism."""
-    blob = json.dumps([prompt, system, str(thinking), mt, seq], ensure_ascii=False)
-    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+_CACHE = SolverCache(os.environ.get("DS1000_SOLVER_CACHE",
+                                     os.path.join(os.path.dirname(__file__), "logs", "solver_cache.json")))
 
 
 def solver_llm(prompt, system="", n=1, thinking=False, max_tokens=None, seq=0):
@@ -153,23 +118,7 @@ def solver_llm(prompt, system="", n=1, thinking=False, max_tokens=None, seq=0):
     for i in range(max(n, 1)):
         # Each of the n samples is its own cache slot: n>1 is a harness ASKING for diversity, so slot i must
         # stay distinct, while a second harness issuing the same n>1 request reuses the same i answers.
-        k = _cache_key(prompt, system, thinking, mt, (seq, i))
-        c = _cache()
-        if k in c:
-            outs.append(c[k])
-            continue
-        v = one()
-        with _CACHE_LOCK:
-            c[k] = v
-            try:
-                os.makedirs(os.path.dirname(_CACHE_PATH), exist_ok=True)
-                tmp = _CACHE_PATH + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(c, fh)
-                os.replace(tmp, _CACHE_PATH)     # atomic: concurrent harnesses must never read a half file
-            except Exception:  # noqa: BLE001
-                pass
-        outs.append(v)
+        outs.append(_CACHE.get_or_call((prompt, system, thinking, mt, seq, i), one))
     return outs[0] if n == 1 else outs
 
 

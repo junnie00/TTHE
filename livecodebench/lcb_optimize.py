@@ -22,6 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import lcb_bridge as bridge
 from . import lcb_proposer as P
 from .lcb_common import load_harness, PKG_DIR, AGENTS_DIR
+from audit_harness import audit_file
 
 _SOLVE_POOL = ThreadPoolExecutor(max_workers=32)
 
@@ -35,11 +36,25 @@ def safe_solve(h, timeout):
 
 
 def _loadable(name, problem):
+    """Admissible only if it IMPORTS and passes the TTHE invariant audit.
+
+    The audit existed but was never wired in: every domain's harness_base docstring claims
+    "audit_harness.py checks them" while nothing called it, leaving FROZEN-SOLVER and LABEL-FREE on
+    the honour system. A violating candidate is rejected here, leaving its branch at its parent.
+    (First run with this enabled on DS-1000 caught a real violation in the first batch.)"""
     try:
         load_harness(name, problem)
-        return True
     except Exception:
         return False
+    try:
+        bad = [v for v in audit_file(AGENTS_DIR / f"{name}.py") if v["rule"] != "PARSE"]
+    except Exception:  # noqa: BLE001
+        return True                       # auditor failure must not reject a valid candidate
+    if bad:
+        print(f"   [audit] REJECTED {name}: " +
+              "; ".join(f"{v['rule']} line {v['line']}: {v['detail']}" for v in bad[:4]), flush=True)
+        return False
+    return True
 
 
 def main():
@@ -92,7 +107,14 @@ def main():
              "## WHAT THE HARNESS DID — every coder call + every public-test run, in order:"]
         for i, st in enumerate(steps, 1):
             if st.get("step") == "coder_llm":
-                L.append(f"\n### step {i} — coder call (thinking={st.get('thinking')})\nPROMPT:\n{str(st.get('prompt'))[:1200]}\n"
+                # Show the HEAD and the TAIL of the prompt. A flat [:1200] cut kept only the problem
+                # statement — which the proposer already knows — and always discarded the tail, where the
+                # harness's OWN appended retry hints and error diagnoses live. A proposer writing those
+                # hints could therefore never observe their effect in any trace, and edited them blind.
+                pr = str(st.get("prompt"))
+                shown = pr if len(pr) <= 2600 else (pr[:900] + f"\n\n... [{len(pr) - 2600} chars of problem "
+                                                    f"statement elided] ...\n\n" + pr[-1700:])
+                L.append(f"\n### step {i} — coder call (thinking={st.get('thinking')})\nPROMPT:\n{shown}\n"
                          f"RESPONSE:\n{str(st.get('response'))[:4000]}")
             else:
                 L.append(f"\n### step {i} — public-test run: {st.get('n_pass')}/{st.get('n_total')}")
@@ -170,7 +192,8 @@ def main():
         # nothing the batch produced beats H, the judge keeps H and the accumulated harness never regresses.
         # cand_results is insertion-ordered (H first, then r0/r1/r2 branches) — use it directly as the pool.
         final = list(cand_results.keys())
-        picked = P.pick_batch(final, trace_dir, run_dir, f"b{bi}", args.model, args.propose_timeout)
+        picked = P.pick_batch(final, trace_dir, run_dir, f"b{bi}", args.model, args.propose_timeout,
+                              incumbent=H)
         H = picked if picked in final else H          # judge failure -> keep the incoming harness, not a random branch
         print(f"   batch{bi}: final branches={branches} ({len(final)} unique) -> JUDGE picked H={H}", flush=True)
         codes = cand_results.get(H)

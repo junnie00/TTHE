@@ -518,6 +518,7 @@ def sample_branches(branches, trace_dir, run_dir, tag, run_name, batch, model, t
 def run_picker(tk):
     """ONE JUDGE session: deep-read the FULL traces of ALL candidates and write the single best harness name."""
     cands, trace_dir, choice_path = tk["candidates"], tk["trace_dir"], tk["choice_path"]
+    incumbent = tk.get("incumbent") or cands[0]
     cand_rows = []
     for candidate in cands:
         card = proposal_card_path(tk["run_dir"], candidate)
@@ -563,7 +564,7 @@ def run_picker(tk):
                        timeout_seconds=tk["timeout"], progress=False)
 
 
-def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout):
+def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout, incumbent=None):
     """Run the JUDGE in a hard-killed subprocess; return the chosen harness name (or None)."""
     if len(candidates) <= 1:
         return candidates[0] if candidates else None
@@ -572,7 +573,8 @@ def pick_batch(candidates, trace_dir, run_dir, tag, model, timeout):
     tpath = Path(run_dir) / f"judgetask_{tag}.json"
     tpath.write_text(json.dumps({"candidates": candidates, "trace_dir": str(trace_dir),
                                  "choice_path": str(choice_path), "run_dir": str(run_dir), "tag": tag,
-                                 "model": model, "timeout": timeout}))
+                                 "model": model, "timeout": timeout,
+                                 "incumbent": incumbent or candidates[0]}))
     p = subprocess.Popen([sys.executable, "-u", "-m", f"{PKG}.proposer", "--picker", str(tpath)],
                          cwd=str(MH_ROOT), start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
