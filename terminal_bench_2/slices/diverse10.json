@@ -1,0 +1,17 @@
+{
+  "dataset": "terminal-bench@2.0",
+  "source_commit": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c",
+  "purpose": "Ten-task cross-domain TTHE stability slice",
+  "tasks": [
+    "extract-elf",
+    "cancel-async-tasks",
+    "configure-git-webserver",
+    "bn-fit-modify",
+    "circuit-fibsqrt",
+    "fix-code-vulnerability",
+    "regex-chess",
+    "password-recovery",
+    "polyglot-rust-c",
+    "write-compressor"
+  ]
+}

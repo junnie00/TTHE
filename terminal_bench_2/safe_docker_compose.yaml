@@ -1,0 +1,13 @@
+services:
+  main:
+    image: ${PREBUILT_IMAGE_NAME}
+    pull_policy: never
+    command: ["sh", "-c", "sleep infinity"]
+    labels:
+      org.tthe.owner: terminal-bench-cont-20261002
+    networks:
+      - tthe
+networks:
+  tthe:
+    name: tthe-tb2-cont-20261002
+    external: true
